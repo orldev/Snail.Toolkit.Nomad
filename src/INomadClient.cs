@@ -23,7 +23,19 @@ public interface INomadJobs
     Task<JsonObject> ParseJobAsync(string hcl, string? variables = null, bool canonicalize = true, CancellationToken cancellationToken = default);
 
     /// <summary>Registers (creates or updates) a job given in its JSON form, as returned by <see cref="ParseJobAsync"/>.</summary>
+    /// <remarks>Last writer wins. Where two deployers can race, register against an index instead.</remarks>
     Task<JobRegistration> RegisterJobAsync(JsonObject job, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Registers the job only while it still stands at <paramref name="expectedModifyIndex"/>, from
+    /// <see cref="NomadJob.Version"/>'s neighbour <see cref="JobRegistration.JobModifyIndex"/> or a
+    /// previous registration. Null when someone else has changed it since — read it again and decide.
+    /// </summary>
+    /// <remarks>
+    /// Zero is the index of a job that does not exist yet, so passing it registers only if nothing
+    /// is there. Without this, two deployments of the same job silently overwrote one another.
+    /// </remarks>
+    Task<JobRegistration?> RegisterJobAsync(JsonObject job, ulong expectedModifyIndex, CancellationToken cancellationToken = default);
 
     /// <summary>The job, or null when Nomad does not know it.</summary>
     Task<NomadJob?> GetJobAsync(string jobId, CancellationToken cancellationToken = default);
@@ -34,6 +46,16 @@ public interface INomadJobs
 
     /// <summary>One page of the namespace's jobs.</summary>
     Task<NomadPage<JobStub>> ListJobsAsync(NomadPaging paging, string? prefix = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Yields the job as it stands, then again on every change Nomad records, until the job is
+    /// purged or the caller stops enumerating.
+    /// </summary>
+    /// <remarks>
+    /// A blocking query: Nomad holds each request open until something moves, so a follower costs
+    /// one idle connection instead of a poll loop and sees a change as it happens.
+    /// </remarks>
+    IAsyncEnumerable<NomadJob> WatchJobAsync(string jobId, CancellationToken cancellationToken = default);
 
     /// <summary>Allocation counts of the job by task group, or null when Nomad does not know it.</summary>
     Task<JobSummary?> GetJobSummaryAsync(string jobId, CancellationToken cancellationToken = default);

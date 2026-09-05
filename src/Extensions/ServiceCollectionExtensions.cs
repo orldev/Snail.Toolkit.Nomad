@@ -28,30 +28,40 @@ public static class ServiceCollectionExtensions
             .Validate(
                 settings => settings.Timeout > TimeSpan.Zero,
                 $"'{NomadOptions.SectionName}:{nameof(NomadOptions.Timeout)}' has to be positive.")
+            .Validate(
+                settings => settings.WatchWait > TimeSpan.Zero && settings.WatchWait < settings.Timeout,
+                $"'{NomadOptions.SectionName}:{nameof(NomadOptions.WatchWait)}' has to be positive and shorter than "
+                + $"'{NomadOptions.SectionName}:{nameof(NomadOptions.Timeout)}', or a watch would be cut off by it.")
             .ValidateOnStart();
 
     extension(IServiceCollection services)
     {
         /// <summary>Binds <see cref="NomadOptions"/> from the "Nomad" section and registers <see cref="INomadClient"/> as a typed HTTP client.</summary>
-        public IServiceCollection AddNomad(IConfiguration configuration)
+        /// <remarks>
+        /// <c>configureClient</c> hands over the underlying <see cref="IHttpClientBuilder"/>, which is
+        /// where a resilience or tracing handler goes. None is added here on purpose: a blanket retry
+        /// would resend <c>POST /v1/jobs</c> and register a job twice. Reads and a stop are safe to
+        /// retry; a registration only is when it carries an index.
+        /// </remarks>
+        public IServiceCollection AddNomad(IConfiguration configuration, Action<IHttpClientBuilder>? configureClient = null)
         {
             ArgumentNullException.ThrowIfNull(services);
             ArgumentNullException.ThrowIfNull(configuration);
 
             Validated(services.AddOptions<NomadOptions>().Bind(configuration.GetSection(NomadOptions.SectionName)));
 
-            return services.AddNomadClient();
+            return services.AddNomadClient(configureClient);
         }
 
         /// <summary>Configures <see cref="NomadOptions"/> in code and registers <see cref="INomadClient"/> as a typed HTTP client.</summary>
-        public IServiceCollection AddNomad(Action<NomadOptions> configure)
+        public IServiceCollection AddNomad(Action<NomadOptions> configure, Action<IHttpClientBuilder>? configureClient = null)
         {
             ArgumentNullException.ThrowIfNull(services);
             ArgumentNullException.ThrowIfNull(configure);
 
             Validated(services.AddOptions<NomadOptions>().Configure(configure));
 
-            return services.AddNomadClient();
+            return services.AddNomadClient(configureClient);
         }
 
         /// <summary>Registers a health check that asks the agent for its version and the cluster for its leader; the name is registered once even when called repeatedly.</summary>
@@ -92,9 +102,9 @@ public static class ServiceCollectionExtensions
         /// Each half of the contract is forwarded to the same typed client, so a caller that only
         /// reads logs or only lists nodes injects that half instead of the whole of Nomad.
         /// </remarks>
-        private IServiceCollection AddNomadClient()
+        private IServiceCollection AddNomadClient(Action<IHttpClientBuilder>? configureClient)
         {
-            services.AddHttpClient<INomadClient, NomadClient>((provider, client) =>
+            var builder = services.AddHttpClient<INomadClient, NomadClient>((provider, client) =>
             {
                 var options = provider.GetRequiredService<IOptions<NomadOptions>>().Value;
 
@@ -103,6 +113,8 @@ public static class ServiceCollectionExtensions
                 if (!string.IsNullOrEmpty(options.Token))
                     client.DefaultRequestHeaders.Add("X-Nomad-Token", options.Token);
             });
+
+            configureClient?.Invoke(builder);
 
             services.TryAddTransient<INomadStatus>(provider => provider.GetRequiredService<INomadClient>());
             services.TryAddTransient<INomadJobs>(provider => provider.GetRequiredService<INomadClient>());

@@ -10,8 +10,8 @@ Everything goes through one `HttpClient` from `IHttpClientFactory`; the ACL toke
 
 | Namespace | Contents |
 |---|---|
-| `Snail.Toolkit.Nomad` | `INomadClient`, `NomadClient`, `NomadOptions`, `NomadException`, `HclVariables` |
-| `Snail.Toolkit.Nomad.Models` | `NomadJob`, `JobStub`, `JobSummary`, `TaskGroupSummary`, `JobRegistration`, `Allocation`, `Evaluation`, `NodeStub`, `NomadAgent`, `LogType` |
+| `Snail.Toolkit.Nomad` | `INomadClient` (and its halves `INomadStatus`, `INomadJobs`, `INomadScheduling`, `INomadNodes`, `INomadLogs`), `NomadClient`, `NomadOptions`, `NomadException`, `HclVariables`, `JobEdits` |
+| `Snail.Toolkit.Nomad.Models` | `NomadJob`, `JobStub`, `JobSummary`, `TaskGroupSummary`, `JobRegistration`, `Allocation`, `Evaluation`, `NodeStub`, `NomadAgent`, `LogType`, `NomadPaging`, `NomadPage<T>` |
 | `Snail.Toolkit.Nomad.Extensions` | `AddNomad`, `AddNomadHealthCheck` |
 | `Snail.Toolkit.Nomad.Health` | `NomadHealthCheck` |
 
@@ -24,12 +24,13 @@ Everything goes through one `HttpClient` from `IHttpClientFactory`; the ACL toke
     "Token": null,
     "Namespace": null,
     "Region": null,
-    "Timeout": "00:00:30"
+    "Timeout": "00:00:30",
+    "WatchWait": "00:00:20"
   }
 }
 ```
 
-`Address` is required. `Token` is sent when set; `Namespace` and `Region` scope every request when set and fall back to the server defaults otherwise.
+`Address` is required and has no default — a missing one fails validation at start rather than quietly meaning localhost. `Token` is sent when set; `Namespace` and `Region` scope every request when set and fall back to the server defaults otherwise. `WatchWait` is how long a blocking query is held open and has to stay under `Timeout`.
 
 ### Registration
 
@@ -42,6 +43,14 @@ builder.Services
 
 // or in code
 builder.Services.AddNomad(options => options.Address = "http://nomad.service:4646");
+```
+
+Each half of the contract is registered on its own, so a log viewer injects `INomadLogs` rather than all of Nomad.
+
+No resilience handler is added. A blanket retry would resend `POST /v1/jobs` and register a job twice — reads and a stop are safe to retry, a registration only when it carries an index. Attach your own through the second argument:
+
+```c#
+builder.Services.AddNomad(builder.Configuration, client => client.AddStandardResilienceHandler());
 ```
 
 ### Jobs
@@ -61,9 +70,21 @@ var job = await nomad.ParseJobAsync(
         ["nodes"] = new[] { "http://gpu-1:11434" }   // lists and maps nest
     }));
 
-job["TaskGroups"]![0]!["Count"] = 2;                 // the parsed job is a JsonObject you may edit
+job.WithGroupCount("server", 2)                      // by name, not by position
+   .WithMeta("deployed-by", "dashboard");
 
 var registration = await nomad.RegisterJobAsync(job); // { EvalId, JobModifyIndex, Warnings }
+```
+
+The parsed job stays a `JsonObject` on purpose: a registration replaces the job whole, and a typed model covering only the fields this platform reads would drop every other block on the way back. `JobEdits` reaches the few places worth editing by name instead.
+
+Where two deployers can race, register against the index the job was read at:
+
+```c#
+var current = await nomad.GetJobAsync("mcp-search");
+var registration = await nomad.RegisterJobAsync(job, expectedModifyIndex: registration.JobModifyIndex);
+if (registration is null)
+    // someone else changed it in between — read it again and decide
 ```
 
 Reading and controlling:
@@ -80,6 +101,35 @@ await nomad.StopJobAsync("mcp-search", purge: true);           // null when unkn
 ```
 
 `ScaleJobAsync` throws `NomadException` with Nomad's own text (`job scaling blocked due to active deployment`) while the previous deployment is still running — register the job again with a new count instead, or wait.
+
+### Watching
+
+Nomad holds a request open until something changes, so following a job costs one idle connection instead of a poll loop:
+
+```c#
+await foreach (var job in nomad.WatchJobAsync("mcp-search", cancellationToken))
+    Console.WriteLine($"{job.Status}: {job.DesiredCount} desired");
+
+await foreach (var allocations in nomad.WatchAllocationsAsync("mcp-search", cancellationToken))
+    Console.WriteLine($"{allocations.Count(allocation => allocation.IsRunning)} running");
+```
+
+The sequence yields the current state first, then only on a real change, and ends when the job is purged.
+
+### Paging
+
+The plain list calls read everything. On a large cluster take a page at a time:
+
+```c#
+var paging = new NomadPaging(PageSize: 100);
+do
+{
+    var page = await nomad.ListJobsAsync(paging, prefix: "mcp-");
+    Handle(page.Items);
+    paging = paging with { Token = page.NextToken };
+}
+while (paging.Token is not null);
+```
 
 ### Allocations, nodes, logs
 

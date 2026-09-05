@@ -301,6 +301,40 @@ public sealed class NomadClientTests
     }
 
     [Fact]
+    public async Task RegisterJob_AgainstAnIndex_EnforcesIt()
+    {
+        var handler = new RecordingHandler(HttpStatusCode.OK, """{"EvalID":"e-3","JobModifyIndex":9}""");
+        var client = RecordingHandler.Client(handler);
+
+        var registration = await client.RegisterJobAsync(new JsonObject { ["ID"] = "mcp-search" }, expectedModifyIndex: 8);
+
+        Assert.NotNull(registration);
+        var sent = JsonNode.Parse(handler.Bodies.Single())!.AsObject();
+        Assert.True(sent["EnforceIndex"]!.GetValue<bool>());
+        Assert.Equal(8ul, sent["JobModifyIndex"]!.GetValue<ulong>());
+    }
+
+    /// <summary>Someone else changed the job since it was read, so this deployment must not land.</summary>
+    [Fact]
+    public async Task RegisterJob_AgainstAStaleIndex_AnswersNull()
+    {
+        var client = RecordingHandler.Client(new RecordingHandler(
+            HttpStatusCode.InternalServerError,
+            "Enforcing job modify index 8: job exists with conflicting job modify index: 11"));
+
+        Assert.Null(await client.RegisterJobAsync(new JsonObject { ["ID"] = "mcp-search" }, expectedModifyIndex: 8));
+    }
+
+    [Fact]
+    public async Task RegisterJob_AgainstAnIndex_WhenNomadFailsForAnotherReason_Throws()
+    {
+        var client = RecordingHandler.Client(new RecordingHandler(HttpStatusCode.InternalServerError, "rpc error: EOF"));
+
+        await Assert.ThrowsAsync<NomadException>(
+            () => client.RegisterJobAsync(new JsonObject { ["ID"] = "mcp-search" }, expectedModifyIndex: 8));
+    }
+
+    [Fact]
     public async Task ListJobs_WithPaging_AsksForOnePageAndReadsTheContinuation()
     {
         var handler = new RecordingHandler(HttpStatusCode.OK, "[]", ("X-Nomad-NextToken", "eyJ0IjoxfQ"));

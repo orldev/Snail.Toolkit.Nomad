@@ -2,6 +2,8 @@
 
     <PropertyGroup>
         <TargetFramework>net10.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
         <GenerateDocumentationFile>true</GenerateDocumentationFile>
         <PackageId>Snail.Toolkit.Nomad</PackageId>
         <PackageTags>Nomad;HashiCorp;scheduler;jobs;HCL;allocations</PackageTags>
@@ -9,15 +11,12 @@
         <Authors>orldev</Authors>
         <Description>Typed client for the HashiCorp Nomad HTTP API over IHttpClientFactory: parse HCL2 jobs with variables, register, read, list, scale and stop jobs, read allocations, evaluations, nodes and task logs.</Description>
         <RepositoryUrl>https://github.com/orldev/Snail.Toolkit.Nomad</RepositoryUrl>
-        <Copyright>Toolkit, 2026</Copyright>
+        <Copyright>Toolkit, 2023-2026</Copyright>
         <PackageProjectUrl>https://github.com/orldev/Snail.Toolkit.Nomad</PackageProjectUrl>
         <RepositoryType>GitHub</RepositoryType>
         <PublishRepositoryUrl>true</PublishRepositoryUrl>
         <PackageReadmeFile>README.md</PackageReadmeFile>
         <PackageLicenseExpression>MIT</PackageLicenseExpression>
-        <IncludeSymbols>true</IncludeSymbols>
-        <SymbolPackageFormat>snupkg</SymbolPackageFormat>
-        <EnablePackageValidation>true</EnablePackageValidation>
         <IsAotCompatible>true</IsAotCompatible>
         <EnableConfigurationBindingGenerator>true</EnableConfigurationBindingGenerator>
         <Version>0.2.0</Version>

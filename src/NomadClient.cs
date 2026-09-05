@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Net;
 using System.Net.Http.Json;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization.Metadata;
@@ -105,6 +106,33 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options,
     }
 
     /// <inheritdoc/>
+    public async Task<JobRegistration?> RegisterJobAsync(JsonObject job, ulong expectedModifyIndex, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(job);
+
+        var request = new JsonObject
+        {
+            ["Job"] = job.DeepClone(),
+            ["EnforceIndex"] = true,
+            ["JobModifyIndex"] = expectedModifyIndex
+        };
+
+        try
+        {
+            var registration = await ReadAsync<JobRegistration>(
+                Scoped(Post("v1/jobs")).AsJson(request, Json), cancellationToken).ConfigureAwait(false);
+
+            NomadLog.JobRegistered(Log, job["ID"]?.ToString() ?? "", registration.EvalId);
+
+            return registration;
+        }
+        catch (NomadException failure) when (IsIndexConflict(failure))
+        {
+            return null;
+        }
+    }
+
+    /// <inheritdoc/>
     public async Task<NomadJob?> GetJobAsync(string jobId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(jobId);
@@ -119,6 +147,14 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options,
     /// <inheritdoc/>
     public async Task<NomadPage<JobStub>> ListJobsAsync(NomadPaging paging, string? prefix = null, CancellationToken cancellationToken = default) =>
         await ReadPageAsync(Paged(Scoped(Get("v1/jobs")).Query("prefix", prefix), paging), NomadJson.Default.ListJobStub, cancellationToken).ConfigureAwait(false);
+
+    /// <inheritdoc/>
+    public IAsyncEnumerable<NomadJob> WatchJobAsync(string jobId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(jobId);
+
+        return WatchAsync($"v1/job/{Escape(jobId)}", NomadJson.Default.NomadJob, cancellationToken);
+    }
 
     /// <inheritdoc/>
     public async Task<JobSummary?> GetJobSummaryAsync(string jobId, CancellationToken cancellationToken = default)
@@ -147,6 +183,14 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options,
         return await ReadPageAsync(
             Paged(Scoped(Get($"v1/job/{Escape(jobId)}/allocations")), paging),
             NomadJson.Default.ListAllocation, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc/>
+    public IAsyncEnumerable<IReadOnlyList<Allocation>> WatchAllocationsAsync(string jobId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(jobId);
+
+        return WatchAsync($"v1/job/{Escape(jobId)}/allocations", NomadJson.Default.ListAllocation, cancellationToken);
     }
 
     /// <inheritdoc/>
@@ -248,6 +292,74 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options,
 
     private ILogger Log => logger ?? NullLogger<NomadClient>.Instance;
 
+    /// <remarks>
+    /// Index zero asks Nomad to answer at once; every later request names the index the last answer
+    /// carried, and Nomad holds it until something passes that index or the wait runs out. An answer
+    /// at the same index is that wait running out, and says nothing changed.
+    /// </remarks>
+    private async IAsyncEnumerable<T> WatchAsync<T>(
+        string path, JsonTypeInfo<T> shape, [EnumeratorCancellation] CancellationToken cancellationToken)
+        where T : class
+    {
+        var index = 0UL;
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            var change = await ReadAtIndexAsync(path, shape, index, cancellationToken).ConfigureAwait(false);
+            if (change is null)
+                yield break;
+
+            var (value, answered) = change.Value;
+            if (answered == 0)
+            {
+                yield return value;
+                yield break;
+            }
+
+            if (answered < index)
+                index = 0;
+            if (answered == index)
+                continue;
+
+            index = answered;
+            yield return value;
+        }
+    }
+
+    private async Task<(T Value, ulong Index)?> ReadAtIndexAsync<T>(
+        string path, JsonTypeInfo<T> shape, ulong index, CancellationToken cancellationToken)
+        where T : class
+    {
+        var wait = (int)options.Value.WatchWait.TotalSeconds;
+        var request = Scoped(Get(path))
+            .Query("index", index.ToString(CultureInfo.InvariantCulture))
+            .Query("wait", $"{wait}s");
+
+        try
+        {
+            using var response = await request
+                .SendCheckedAsync(HttpCompletionOption.ResponseContentRead, cancellationToken).ConfigureAwait(false);
+
+            var value = await response.Content.ReadFromJsonAsync(shape, cancellationToken).ConfigureAwait(false);
+
+            return value is null ? null : (value, Index(response));
+        }
+        catch (HttpBuilderException failure) when (failure.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+        catch (HttpBuilderException failure)
+        {
+            throw Translate(failure);
+        }
+    }
+
+    /// <remarks>Zero says the answer carried no index, so there is nothing to follow.</remarks>
+    private static ulong Index(HttpResponseMessage response) =>
+        response.Headers.TryGetValues("X-Nomad-Index", out var values)
+        && ulong.TryParse(values.FirstOrDefault(), CultureInfo.InvariantCulture, out var index)
+            ? index
+            : 0;
+
     /// <summary>Asks for one page instead of the whole list.</summary>
     private static IHttpRequestBuilder Paged(IHttpRequestBuilder request, NomadPaging paging) =>
         request
@@ -340,6 +452,14 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options,
             return new string(buffer, 0, read);
         }
     }
+
+    /// <remarks>
+    /// Nomad reports a refused enforce-index as a plain 500 whose text names the index, so the text
+    /// is the only signal there is. Matched loosely on purpose: the wording has moved between
+    /// versions, the index numbers in it have not.
+    /// </remarks>
+    private static bool IsIndexConflict(NomadException failure) =>
+        failure.Message.Contains("job modify index", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsElection(HttpBuilderException failure) =>
         failure.StatusCode == HttpStatusCode.InternalServerError

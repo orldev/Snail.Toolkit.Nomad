@@ -24,4 +24,11 @@ public sealed class NomadOptions
 
     /// <summary>Timeout of one HTTP call.</summary>
     public TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>How long a watch asks Nomad to hold a request open while nothing changes.</summary>
+    /// <remarks>
+    /// Has to stay under <see cref="Timeout"/> with room to spare: Nomad adds jitter of up to a
+    /// sixteenth of this on top, and the client's own timeout aborts the call regardless.
+    /// </remarks>
+    public TimeSpan WatchWait { get; set; } = TimeSpan.FromSeconds(20);
 }
