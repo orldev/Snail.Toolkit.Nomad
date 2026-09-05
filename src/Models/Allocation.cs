@@ -4,11 +4,11 @@ namespace Snail.Toolkit.Nomad.Models;
 
 /// <summary>State of one task inside an allocation.</summary>
 public sealed record AllocationTaskState(
-    string State,
-    bool Failed,
-    int Restarts,
-    DateTimeOffset StartedAt,
-    DateTimeOffset FinishedAt);
+    string State = "",
+    bool Failed = false,
+    int Restarts = 0,
+    DateTimeOffset StartedAt = default,
+    DateTimeOffset FinishedAt = default);
 
 /// <summary>One allocation of a job, from /v1/job/:id/allocations.</summary>
 public sealed record Allocation(
@@ -17,12 +17,12 @@ public sealed record Allocation(
     [property: JsonPropertyName("JobID")] string JobId,
     string TaskGroup,
     [property: JsonPropertyName("NodeID")] string NodeId,
-    string NodeName,
-    string ClientStatus,
-    string DesiredStatus,
-    long CreateTime,
-    long ModifyTime,
-    IReadOnlyDictionary<string, AllocationTaskState>? TaskStates)
+    string NodeName = "",
+    string ClientStatus = "",
+    string DesiredStatus = "",
+    long CreateTime = 0,
+    long ModifyTime = 0,
+    IReadOnlyDictionary<string, AllocationTaskState>? TaskStates = null)
 {
     /// <summary>When the allocation was created.</summary>
     public DateTimeOffset CreatedAt => NomadTime.FromNanoseconds(CreateTime);

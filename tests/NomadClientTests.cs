@@ -151,4 +151,126 @@ public sealed class NomadClientTests
 
         Assert.Throws<InvalidOperationException>(() => services.AddNomad(TestConfiguration.Get(address: null)));
     }
+
+    /// <summary>An address that is not a Nomad agent answers 404 to everything.</summary>
+    [Fact]
+    public async Task ListJobs_WhenTheEndpointIsNotFound_Throws()
+    {
+        var client = RecordingHandler.Client(new RecordingHandler(HttpStatusCode.NotFound, "404 page not found"));
+
+        var exception = await Assert.ThrowsAsync<NomadException>(() => client.ListJobsAsync());
+
+        Assert.Equal(HttpStatusCode.NotFound, exception.StatusCode);
+    }
+
+    [Fact]
+    public async Task ListNodes_WhenTheEndpointIsNotFound_Throws()
+    {
+        var client = RecordingHandler.Client(new RecordingHandler(HttpStatusCode.NotFound, "404 page not found"));
+
+        await Assert.ThrowsAsync<NomadException>(() => client.ListNodesAsync());
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task GetJob_WithABlankId_Throws(string jobId)
+    {
+        var client = RecordingHandler.Client(new RecordingHandler(HttpStatusCode.OK, "{}"));
+
+        await Assert.ThrowsAsync<ArgumentException>(() => client.GetJobAsync(jobId));
+    }
+
+    [Fact]
+    public async Task ReadLogs_WithATailBeyondTheCap_Throws()
+    {
+        var client = RecordingHandler.Client(new RecordingHandler(HttpStatusCode.OK, "text"));
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+            () => client.ReadLogsAsync("a-1", "mcp", tailBytes: NomadClient.MaxTailBytes + 1));
+    }
+
+    [Fact]
+    public async Task GetLeader_WhileTheServersElectOne_ReadsAsNull()
+    {
+        var client = RecordingHandler.Client(new RecordingHandler(HttpStatusCode.InternalServerError, "No cluster leader"));
+
+        Assert.Null(await client.GetLeaderAsync());
+    }
+
+    /// <summary>Nomad answers 500 for a failed RPC too, and that is not an election.</summary>
+    [Fact]
+    public async Task GetLeader_WhenTheCallFailsForAnotherReason_Throws()
+    {
+        var client = RecordingHandler.Client(new RecordingHandler(HttpStatusCode.InternalServerError, "rpc error: EOF"));
+
+        var exception = await Assert.ThrowsAsync<NomadException>(() => client.GetLeaderAsync());
+
+        Assert.Equal("rpc error: EOF", exception.Message);
+    }
+
+    [Fact]
+    public async Task Failure_CarriesTheMethodAndTheAddress()
+    {
+        var client = RecordingHandler.Client(new RecordingHandler(HttpStatusCode.Conflict, "conflict"));
+
+        var exception = await Assert.ThrowsAsync<NomadException>(() => client.StopJobAsync("mcp-search"));
+
+        Assert.Equal(HttpMethod.Delete, exception.Method);
+        Assert.Equal("http://nomad.test:4646/v1/job/mcp-search", exception.RequestUri!.ToString());
+    }
+
+    [Fact]
+    public async Task Failure_WithABodyBeyondTheLimit_CutsIt()
+    {
+        var client = RecordingHandler.Client(new RecordingHandler(HttpStatusCode.BadRequest, new string('x', 20_000)));
+
+        var exception = await Assert.ThrowsAsync<NomadException>(() => client.ListJobsAsync());
+
+        Assert.Equal(NomadException.BodyLimit + 1, exception.Message.Length);
+        Assert.EndsWith("…", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ReadingJson_WhenTheBodyIsNotWhatTheCallExpects_ThrowsNomadException()
+    {
+        var client = RecordingHandler.Client(new RecordingHandler(HttpStatusCode.OK, "<html>a proxy answered</html>"));
+
+        await Assert.ThrowsAsync<NomadException>(() => client.ListJobsAsync());
+    }
+
+    /// <summary>A null there used to arrive as one and surface later as a dereference in Running.</summary>
+    [Fact]
+    public async Task GetJobSummary_WhenTheCountsAreNull_Throws()
+    {
+        var client = RecordingHandler.Client(new RecordingHandler(HttpStatusCode.OK,
+            """{"JobID":"mcp-search","Namespace":"default","Summary":null}"""));
+
+        await Assert.ThrowsAsync<NomadException>(() => client.GetJobSummaryAsync("mcp-search"));
+    }
+
+    [Fact]
+    public async Task GetJob_WithoutTheTaskGroups_Throws()
+    {
+        var client = RecordingHandler.Client(new RecordingHandler(HttpStatusCode.OK,
+            """
+            {"ID":"mcp-search","Name":"mcp-search","Namespace":"default","Type":"service","Status":"running",
+             "StatusDescription":"","Version":0,"Stop":false,"SubmitTime":1}
+            """));
+
+        await Assert.ThrowsAsync<NomadException>(() => client.GetJobAsync("mcp-search"));
+    }
+
+    /// <summary>An ACL that hides the configuration still lets the agent answer.</summary>
+    [Fact]
+    public async Task GetAgent_WithoutAConfigSection_ReadsTheFieldsAsEmpty()
+    {
+        var client = RecordingHandler.Client(new RecordingHandler(HttpStatusCode.OK, """{"member":{"Name":"srv-1"}}"""));
+
+        var agent = await client.GetAgentAsync();
+
+        Assert.Equal("srv-1", agent.Name);
+        Assert.Equal("", agent.Version);
+        Assert.False(agent.ServerEnabled);
+    }
 }

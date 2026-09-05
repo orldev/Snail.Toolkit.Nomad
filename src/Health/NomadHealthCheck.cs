@@ -10,8 +10,8 @@ public sealed class NomadHealthCheck(INomadClient client) : IHealthCheck
     {
         try
         {
-            var agent = await client.GetAgentAsync(cancellationToken);
-            var leader = await client.GetLeaderAsync(cancellationToken);
+            var agent = await client.GetAgentAsync(cancellationToken).ConfigureAwait(false);
+            var leader = await client.GetLeaderAsync(cancellationToken).ConfigureAwait(false);
             var data = new Dictionary<string, object>
             {
                 ["version"] = agent.Version,
@@ -23,9 +23,13 @@ public sealed class NomadHealthCheck(INomadClient client) : IHealthCheck
                 ? HealthCheckResult.Degraded("Nomad has no cluster leader.", data: data)
                 : HealthCheckResult.Healthy($"Nomad {agent.Version}", data);
         }
-        catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException or NomadException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            return HealthCheckResult.Unhealthy("Nomad is not reachable.", exception);
+            throw;
+        }
+        catch (Exception exception) when (exception is HttpRequestException or OperationCanceledException or NomadException)
+        {
+            return new HealthCheckResult(context.Registration.FailureStatus, "Nomad is not reachable.", exception);
         }
     }
 }

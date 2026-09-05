@@ -6,14 +6,14 @@ namespace Snail.Toolkit.Nomad.Models;
 public sealed record NodeStub(
     [property: JsonPropertyName("ID")] string Id,
     string Name,
-    string Datacenter,
-    string NodeClass,
-    string Status,
-    string StatusDescription,
-    bool Drain,
-    string SchedulingEligibility,
-    string Version,
-    string Address)
+    string Datacenter = "",
+    string NodeClass = "",
+    string Status = "",
+    string StatusDescription = "",
+    bool Drain = false,
+    string SchedulingEligibility = "",
+    string Version = "",
+    string Address = "")
 {
     /// <summary>The node is up and accepts placements.</summary>
     public bool IsReady =>

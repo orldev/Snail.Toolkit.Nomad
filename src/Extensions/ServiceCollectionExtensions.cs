@@ -9,6 +9,8 @@ namespace Snail.Toolkit.Nomad.Extensions;
 /// <summary>Registers the Nomad client over IHttpClientFactory.</summary>
 public static class ServiceCollectionExtensions
 {
+    private static readonly TimeSpan DefaultProbeTimeout = TimeSpan.FromSeconds(5);
+
     extension(IServiceCollection services)
     {
         /// <summary>Binds <see cref="NomadOptions"/> from the "Nomad" section and registers <see cref="INomadClient"/> as a typed HTTP client.</summary>
@@ -37,12 +39,21 @@ public static class ServiceCollectionExtensions
         }
 
         /// <summary>Registers a health check that asks the agent for its version and the cluster for its leader; the name is registered once even when called repeatedly.</summary>
+        /// <remarks>
+        /// The probe carries a budget of its own, five seconds unless <c>timeout</c> says otherwise,
+        /// because it makes two calls: without one an unresponsive agent held the whole health
+        /// endpoint for twice the client's timeout.
+        /// </remarks>
         public IServiceCollection AddNomadHealthCheck(
             string name = "nomad",
             HealthStatus failureStatus = HealthStatus.Unhealthy,
-            IEnumerable<string>? tags = null)
+            IEnumerable<string>? tags = null,
+            TimeSpan? timeout = null)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(name);
+
+            if (services.All(descriptor => descriptor.ServiceType != typeof(INomadClient)))
+                throw new InvalidOperationException($"{nameof(AddNomad)} has to be called before {nameof(AddNomadHealthCheck)}.");
 
             services.AddHealthChecks();
             services.Configure<HealthCheckServiceOptions>(options =>
@@ -54,7 +65,8 @@ public static class ServiceCollectionExtensions
                     name,
                     provider => new NomadHealthCheck(provider.GetRequiredService<INomadClient>()),
                     failureStatus,
-                    tags));
+                    tags,
+                    timeout ?? DefaultProbeTimeout));
             });
 
             return services;

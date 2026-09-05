@@ -7,11 +7,11 @@ namespace Snail.Toolkit.Nomad.Models;
 public sealed record Evaluation(
     [property: JsonPropertyName("ID")] string Id,
     string Status,
-    string? StatusDescription,
-    string? Type,
-    string? TriggeredBy,
-    [property: JsonPropertyName("FailedTGAllocs")] IReadOnlyDictionary<string, JsonElement>? FailedTaskGroupAllocations,
-    long CreateTime)
+    string? StatusDescription = null,
+    string? Type = null,
+    string? TriggeredBy = null,
+    [property: JsonPropertyName("FailedTGAllocs")] IReadOnlyDictionary<string, JsonElement>? FailedTaskGroupAllocations = null,
+    long CreateTime = 0)
 {
     /// <summary>Task groups the scheduler could not place, if any.</summary>
     public IReadOnlyCollection<string> FailedTaskGroups => FailedTaskGroupAllocations?.Keys.ToArray() ?? [];

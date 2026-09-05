@@ -15,7 +15,8 @@ internal sealed class RecordingHandler(HttpStatusCode status, string body) : Htt
         Bodies.Add(request.Content is null ? "" : await request.Content.ReadAsStringAsync(cancellationToken));
         return new HttpResponseMessage(status)
         {
-            Content = new StringContent(body, Encoding.UTF8, "application/json")
+            Content = new StringContent(body, Encoding.UTF8, "application/json"),
+            RequestMessage = request
         };
     }
 

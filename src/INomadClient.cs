@@ -6,7 +6,8 @@ namespace Snail.Toolkit.Nomad;
 /// <summary>
 /// The Nomad HTTP API the platform needs: parse HCL2 jobs, register, read, list, scale and stop them,
 /// read allocations, evaluations, nodes and task logs. Every call throws <see cref="NomadException"/>
-/// on an error status; reads of a missing object return null instead.
+/// on an error status; a read addressed at one object by its id answers null when Nomad does not
+/// know it. A list endpoint takes no id, so its 404 is an error like any other rather than emptiness.
 /// </summary>
 public interface INomadClient
 {
@@ -50,5 +51,9 @@ public interface INomadClient
     Task<IReadOnlyList<NodeStub>> ListNodesAsync(CancellationToken cancellationToken = default);
 
     /// <summary>The last <paramref name="tailBytes"/> of one task's stdout or stderr; empty when the allocation is gone or has no log yet.</summary>
+    /// <remarks>
+    /// A client node that cannot be reached throws instead of answering empty: a log viewer has to
+    /// tell "this task said nothing" from "nobody could be asked".
+    /// </remarks>
     Task<string> ReadLogsAsync(string allocationId, string task, LogType type = LogType.Stdout, int tailBytes = 4096, CancellationToken cancellationToken = default);
 }
