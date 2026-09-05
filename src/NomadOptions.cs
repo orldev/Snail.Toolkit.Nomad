@@ -7,7 +7,11 @@ public sealed class NomadOptions
     public const string SectionName = "Nomad";
 
     /// <summary>Base address of the Nomad HTTP API, e.g. "http://localhost:4646".</summary>
-    public string Address { get; set; } = "http://localhost:4646";
+    /// <remarks>
+    /// Required, and deliberately without a default: falling back to localhost would let a
+    /// deployment that forgot to configure Nomad talk to whatever answers on the same machine.
+    /// </remarks>
+    public string Address { get; set; } = "";
 
     /// <summary>ACL token sent as X-Nomad-Token on every request; none by default.</summary>
     public string? Token { get; set; }

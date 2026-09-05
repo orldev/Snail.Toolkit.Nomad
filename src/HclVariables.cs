@@ -60,9 +60,8 @@ public static class HclVariables
 
     private static string Structure(object value, int depth)
     {
-        var entries = Entries(value);
-        if (entries is not null)
-            return Map(entries, depth);
+        if (value is IDictionary map)
+            return Map(Untyped(map), depth);
 
         if (value is IEnumerable list)
             return List(list, depth);
@@ -111,11 +110,26 @@ public static class HclVariables
         return builder.Append('"').ToString();
     }
 
+    /// <remarks>
+    /// A dictionary that implements only <see cref="IReadOnlyDictionary{TKey,TValue}"/> arrives here
+    /// as a sequence of pairs and used to render as a list of them. Reading it back would take
+    /// reflection, which this library stays clear of, so it is refused by name instead.
+    /// </remarks>
     private static string List(IEnumerable list, int depth)
     {
         List<string> items = [];
         foreach (var item in list)
+        {
+            if (item is not null && item.GetType() is { IsGenericType: true } pair
+                && pair.GetGenericTypeDefinition() == typeof(KeyValuePair<,>))
+            {
+                throw new ArgumentException(
+                    $"{list.GetType()} looks like a map but does not implement {nameof(IDictionary)}; "
+                    + "pass a Dictionary<string, object?> instead.", nameof(list));
+            }
+
             items.Add(Literal(item, depth + 1));
+        }
 
         return $"[{string.Join(", ", items)}]";
     }
@@ -131,21 +145,6 @@ public static class HclVariables
     }
 
     /// <remarks>
-    /// A dictionary reaching <see cref="Literal(object?)"/> as <see cref="IReadOnlyDictionary{TKey,TValue}"/>
-    /// alone would otherwise match <see cref="IEnumerable"/> and render as a list of pairs.
-    /// </remarks>
-    private static IEnumerable<DictionaryEntry>? Entries(object value)
-    {
-        if (value is IDictionary map)
-            return Untyped(map);
-
-        var contract = value.GetType().GetInterfaces().FirstOrDefault(candidate =>
-            candidate.IsGenericType && candidate.GetGenericTypeDefinition() == typeof(IReadOnlyDictionary<,>));
-
-        return contract is null ? null : Pairs((IEnumerable)value);
-    }
-
-    /// <remarks>
     /// Only <see cref="IDictionary.GetEnumerator"/> yields <see cref="DictionaryEntry"/>; reading the
     /// same dictionary as a plain <see cref="IEnumerable"/> yields generic pairs instead.
     /// </remarks>
@@ -153,17 +152,6 @@ public static class HclVariables
     {
         foreach (DictionaryEntry entry in map)
             yield return entry;
-    }
-
-    private static IEnumerable<DictionaryEntry> Pairs(IEnumerable source)
-    {
-        foreach (var pair in source)
-        {
-            var type = pair.GetType();
-            yield return new DictionaryEntry(
-                type.GetProperty("Key")!.GetValue(pair)!,
-                type.GetProperty("Value")!.GetValue(pair));
-        }
     }
 
     private static bool IsIdentifier(string name) =>

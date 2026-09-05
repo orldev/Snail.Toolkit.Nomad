@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
 using Snail.Toolkit.Nomad.Health;
@@ -11,6 +12,24 @@ public static class ServiceCollectionExtensions
 {
     private static readonly TimeSpan DefaultProbeTimeout = TimeSpan.FromSeconds(5);
 
+    /// <summary>The one place the settings are judged, whichever overload supplied them.</summary>
+    /// <remarks>
+    /// Bound and coded settings used to be checked differently and at different moments — eagerly
+    /// against the raw section in one overload, lazily inside the client factory in the other, and
+    /// not at all in between. Validation runs at start instead, so a bad address stops the host
+    /// rather than the first call.
+    /// </remarks>
+    private static void Validated(OptionsBuilder<NomadOptions> builder) =>
+        builder
+            .Validate(
+                settings => Uri.TryCreate(settings.Address, UriKind.Absolute, out var address)
+                            && (address.Scheme == Uri.UriSchemeHttp || address.Scheme == Uri.UriSchemeHttps),
+                $"'{NomadOptions.SectionName}:{nameof(NomadOptions.Address)}' has to be an absolute http or https address.")
+            .Validate(
+                settings => settings.Timeout > TimeSpan.Zero,
+                $"'{NomadOptions.SectionName}:{nameof(NomadOptions.Timeout)}' has to be positive.")
+            .ValidateOnStart();
+
     extension(IServiceCollection services)
     {
         /// <summary>Binds <see cref="NomadOptions"/> from the "Nomad" section and registers <see cref="INomadClient"/> as a typed HTTP client.</summary>
@@ -19,12 +38,8 @@ public static class ServiceCollectionExtensions
             ArgumentNullException.ThrowIfNull(services);
             ArgumentNullException.ThrowIfNull(configuration);
 
-            var section = configuration.GetSection(NomadOptions.SectionName);
-            if (string.IsNullOrWhiteSpace(section[nameof(NomadOptions.Address)]))
-                throw new InvalidOperationException(
-                    $"Configuration key '{NomadOptions.SectionName}:{nameof(NomadOptions.Address)}' is required.");
+            Validated(services.AddOptions<NomadOptions>().Bind(configuration.GetSection(NomadOptions.SectionName)));
 
-            services.AddOptions<NomadOptions>().Bind(section);
             return services.AddNomadClient();
         }
 
@@ -34,7 +49,8 @@ public static class ServiceCollectionExtensions
             ArgumentNullException.ThrowIfNull(services);
             ArgumentNullException.ThrowIfNull(configure);
 
-            services.AddOptions<NomadOptions>().Configure(configure);
+            Validated(services.AddOptions<NomadOptions>().Configure(configure));
+
             return services.AddNomadClient();
         }
 
@@ -72,19 +88,27 @@ public static class ServiceCollectionExtensions
             return services;
         }
 
+        /// <remarks>
+        /// Each half of the contract is forwarded to the same typed client, so a caller that only
+        /// reads logs or only lists nodes injects that half instead of the whole of Nomad.
+        /// </remarks>
         private IServiceCollection AddNomadClient()
         {
             services.AddHttpClient<INomadClient, NomadClient>((provider, client) =>
             {
                 var options = provider.GetRequiredService<IOptions<NomadOptions>>().Value;
-                if (string.IsNullOrWhiteSpace(options.Address))
-                    throw new InvalidOperationException($"{nameof(NomadOptions)}.{nameof(NomadOptions.Address)} is required.");
 
                 client.BaseAddress = new Uri(options.Address.TrimEnd('/') + "/");
                 client.Timeout = options.Timeout;
                 if (!string.IsNullOrEmpty(options.Token))
                     client.DefaultRequestHeaders.Add("X-Nomad-Token", options.Token);
             });
+
+            services.TryAddTransient<INomadStatus>(provider => provider.GetRequiredService<INomadClient>());
+            services.TryAddTransient<INomadJobs>(provider => provider.GetRequiredService<INomadClient>());
+            services.TryAddTransient<INomadScheduling>(provider => provider.GetRequiredService<INomadClient>());
+            services.TryAddTransient<INomadNodes>(provider => provider.GetRequiredService<INomadClient>());
+            services.TryAddTransient<INomadLogs>(provider => provider.GetRequiredService<INomadClient>());
 
             return services;
         }

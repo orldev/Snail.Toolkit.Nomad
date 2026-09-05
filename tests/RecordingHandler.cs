@@ -4,7 +4,7 @@ using System.Text;
 namespace Snail.Toolkit.Nomad.Tests;
 
 /// <summary>Answers every request with a canned response and keeps what was sent.</summary>
-internal sealed class RecordingHandler(HttpStatusCode status, string body) : HttpMessageHandler
+internal sealed class RecordingHandler(HttpStatusCode status, string body, params (string Name, string Value)[] headers) : HttpMessageHandler
 {
     public List<HttpRequestMessage> Requests { get; } = [];
     public List<string> Bodies { get; } = [];
@@ -13,11 +13,15 @@ internal sealed class RecordingHandler(HttpStatusCode status, string body) : Htt
     {
         Requests.Add(request);
         Bodies.Add(request.Content is null ? "" : await request.Content.ReadAsStringAsync(cancellationToken));
-        return new HttpResponseMessage(status)
+        var response = new HttpResponseMessage(status)
         {
             Content = new StringContent(body, Encoding.UTF8, "application/json"),
             RequestMessage = request
         };
+        foreach (var (name, value) in headers)
+            response.Headers.Add(name, value);
+
+        return response;
     }
 
     public static NomadClient Client(RecordingHandler handler, Action<NomadOptions>? configure = null)

@@ -60,7 +60,7 @@ public sealed class NomadIntegrationTests(NomadContainerFixture fixture) : IClas
     }
 
     [IntegrationFact]
-    public async Task Agent_and_leader_answer()
+    public async Task AgentAndLeader_AgainstALiveServer_Answer()
     {
         var client = await ClientAsync();
 
@@ -74,14 +74,14 @@ public sealed class NomadIntegrationTests(NomadContainerFixture fixture) : IClas
     }
 
     [IntegrationFact]
-    public async Task Job_round_trip_parse_register_read_list_summary_stop()
+    public async Task Job_ParsedRegisteredAndStopped_RoundTripsThroughNomad()
     {
         var client = await ClientAsync();
         var name = "it-" + Guid.NewGuid().ToString("N")[..6];
         var jobId = "mcp-" + name;
 
         var job = await client.ParseJobAsync(
-            Hcl.Replace("mcp-NAME", jobId),
+            Hcl.Replace("mcp-NAME", jobId, StringComparison.Ordinal),
             HclVariables.Render(new Dictionary<string, object?> { ["name"] = name, ["image"] = "alpine:3", ["port"] = 8803 }));
         Assert.Equal(jobId, job["ID"]!.GetValue<string>());
         Assert.Equal(8803, job["TaskGroups"]![0]!["Networks"]![0]!["DynamicPorts"]![0]!["To"]!.GetValue<int>());

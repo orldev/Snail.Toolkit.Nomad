@@ -3,7 +3,11 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization.Metadata;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Snail.Toolkit.HttpBuilder.Extensions;
 using Snail.Toolkit.Nomad.Models;
 
 namespace Snail.Toolkit.Nomad;
@@ -12,7 +16,14 @@ namespace Snail.Toolkit.Nomad;
 /// <see cref="INomadClient"/> over one <see cref="HttpClient"/> configured by AddNomad: the token travels
 /// as a default header, namespace and region as query parameters of every request.
 /// </summary>
-public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options) : INomadClient
+/// <remarks>
+/// The transport is <see cref="TypedHttpClientBase"/>, so path joining, query escaping and the capped
+/// error body come from one implementation shared with the other toolkit clients. Its
+/// <see cref="HttpBuilderException"/> is translated at every boundary: the transport is an
+/// implementation detail and must not surface in this client's contract.
+/// </remarks>
+public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options, ILogger<NomadClient>? logger = null)
+    : TypedHttpClientBase(http), INomadClient
 {
     /// <summary>Largest tail one log read may ask for.</summary>
     /// <remarks>
@@ -22,21 +33,16 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options)
     public const int MaxTailBytes = 1024 * 1024;
 
     /// <remarks>
-    /// The two Respect flags make the records' own signatures the contract: a non-nullable member
-    /// fed null, or a parameter without a default left unsent, fails the read instead of arriving
-    /// as a null that the type says cannot happen and a computed property then dereferences.
+    /// The generated metadata of <see cref="NomadJson"/>, so the models survive trimming and their
+    /// own signatures stay the contract: a non-nullable member fed null, or a parameter without a
+    /// default left unsent, fails the read instead of arriving as a null the type forbids.
     /// </remarks>
-    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.General)
-    {
-        PropertyNameCaseInsensitive = true,
-        RespectNullableAnnotations = true,
-        RespectRequiredConstructorParameters = true
-    };
+    private static readonly JsonSerializerOptions Json = NomadJson.Default.Options;
 
     /// <inheritdoc/>
     public async Task<NomadAgent> GetAgentAsync(CancellationToken cancellationToken = default)
     {
-        var self = await GetAsync<AgentSelf>(Path("v1/agent/self"), cancellationToken).ConfigureAwait(false);
+        var self = await ReadAsync<AgentSelf>(Scoped(Get("v1/agent/self")), cancellationToken).ConfigureAwait(false);
         var config = self.Config;
 
         return new NomadAgent(
@@ -51,14 +57,20 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options)
     /// <inheritdoc/>
     public async Task<string?> GetLeaderAsync(CancellationToken cancellationToken = default)
     {
-        using var response = await http.GetAsync(Path("v1/status/leader"), cancellationToken).ConfigureAwait(false);
-        if (response.StatusCode == HttpStatusCode.InternalServerError)
-            return await LeaderOrFailureAsync(response, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var leader = await Scoped(Get("v1/status/leader")).SendAsync<string>(cancellationToken).ConfigureAwait(false);
 
-        await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
-        var leader = await ReadAsync<string>(response, cancellationToken).ConfigureAwait(false);
-
-        return string.IsNullOrEmpty(leader) ? null : leader;
+            return string.IsNullOrEmpty(leader) ? null : leader;
+        }
+        catch (HttpBuilderException failure) when (IsElection(failure))
+        {
+            return null;
+        }
+        catch (HttpBuilderException failure)
+        {
+            throw Translate(failure);
+        }
     }
 
     /// <inheritdoc/>
@@ -74,10 +86,7 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options)
         if (!string.IsNullOrEmpty(variables))
             request["Variables"] = variables;
 
-        using var response = await http.PostAsJsonAsync(Path("v1/jobs/parse"), request, Json, cancellationToken).ConfigureAwait(false);
-        await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
-
-        return await ReadAsync<JsonObject>(response, cancellationToken).ConfigureAwait(false);
+        return await ReadAsync<JsonObject>(Scoped(Post("v1/jobs/parse")).AsJson(request, Json), cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -86,9 +95,13 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options)
         ArgumentNullException.ThrowIfNull(job);
 
         var request = new JsonObject { ["Job"] = job.DeepClone() };
-        using var response = await http.PostAsJsonAsync(Path("v1/jobs"), request, Json, cancellationToken).ConfigureAwait(false);
 
-        return await ReadRegistrationAsync(response, cancellationToken).ConfigureAwait(false);
+        var registration = await ReadAsync<JobRegistration>(
+            Scoped(Post("v1/jobs")).AsJson(request, Json), cancellationToken).ConfigureAwait(false);
+
+        NomadLog.JobRegistered(Log, job["ID"]?.ToString() ?? "", registration.EvalId);
+
+        return registration;
     }
 
     /// <inheritdoc/>
@@ -96,19 +109,23 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(jobId);
 
-        return await GetOrNullAsync<NomadJob>(Path($"v1/job/{Escape(jobId)}"), cancellationToken).ConfigureAwait(false);
+        return await ReadOrNullAsync<NomadJob>(Scoped(Get($"v1/job/{Escape(jobId)}")), cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
     public async Task<IReadOnlyList<JobStub>> ListJobsAsync(string? prefix = null, CancellationToken cancellationToken = default) =>
-        await GetAsync<List<JobStub>>(Path("v1/jobs", prefix is null ? null : ("prefix", prefix)), cancellationToken).ConfigureAwait(false);
+        await ReadAsync<List<JobStub>>(Scoped(Get("v1/jobs")).Query("prefix", prefix), cancellationToken).ConfigureAwait(false);
+
+    /// <inheritdoc/>
+    public async Task<NomadPage<JobStub>> ListJobsAsync(NomadPaging paging, string? prefix = null, CancellationToken cancellationToken = default) =>
+        await ReadPageAsync(Paged(Scoped(Get("v1/jobs")).Query("prefix", prefix), paging), NomadJson.Default.ListJobStub, cancellationToken).ConfigureAwait(false);
 
     /// <inheritdoc/>
     public async Task<JobSummary?> GetJobSummaryAsync(string jobId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(jobId);
 
-        return await GetOrNullAsync<JobSummary>(Path($"v1/job/{Escape(jobId)}/summary"), cancellationToken).ConfigureAwait(false);
+        return await ReadOrNullAsync<JobSummary>(Scoped(Get($"v1/job/{Escape(jobId)}/summary")), cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -116,9 +133,20 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(jobId);
 
-        var allocations = await GetOrNullAsync<List<Allocation>>(Path($"v1/job/{Escape(jobId)}/allocations"), cancellationToken).ConfigureAwait(false);
+        var allocations = await ReadOrNullAsync<List<Allocation>>(
+            Scoped(Get($"v1/job/{Escape(jobId)}/allocations")), cancellationToken).ConfigureAwait(false);
 
         return allocations?.OrderByDescending(allocation => allocation.CreateTime).ToList() ?? [];
+    }
+
+    /// <inheritdoc/>
+    public async Task<NomadPage<Allocation>> ListAllocationsAsync(string jobId, NomadPaging paging, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(jobId);
+
+        return await ReadPageAsync(
+            Paged(Scoped(Get($"v1/job/{Escape(jobId)}/allocations")), paging),
+            NomadJson.Default.ListAllocation, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -126,9 +154,20 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(jobId);
 
-        var evaluations = await GetOrNullAsync<List<Evaluation>>(Path($"v1/job/{Escape(jobId)}/evaluations"), cancellationToken).ConfigureAwait(false);
+        var evaluations = await ReadOrNullAsync<List<Evaluation>>(
+            Scoped(Get($"v1/job/{Escape(jobId)}/evaluations")), cancellationToken).ConfigureAwait(false);
 
         return evaluations?.OrderByDescending(evaluation => evaluation.CreateTime).ToList() ?? [];
+    }
+
+    /// <inheritdoc/>
+    public async Task<NomadPage<Evaluation>> ListEvaluationsAsync(string jobId, NomadPaging paging, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(jobId);
+
+        return await ReadPageAsync(
+            Paged(Scoped(Get($"v1/job/{Escape(jobId)}/evaluations")), paging),
+            NomadJson.Default.ListEvaluation, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -145,9 +184,12 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options)
             ["Message"] = message
         };
 
-        using var response = await http.PostAsJsonAsync(Path($"v1/job/{Escape(jobId)}/scale"), request, Json, cancellationToken).ConfigureAwait(false);
+        var registration = await ReadAsync<JobRegistration>(
+            Scoped(Post($"v1/job/{Escape(jobId)}/scale")).AsJson(request, Json), cancellationToken).ConfigureAwait(false);
 
-        return await ReadRegistrationAsync(response, cancellationToken).ConfigureAwait(false);
+        NomadLog.JobScaled(Log, jobId, taskGroup, count, registration.EvalId);
+
+        return registration;
     }
 
     /// <inheritdoc/>
@@ -155,16 +197,22 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(jobId);
 
-        using var response = await http.DeleteAsync(Path($"v1/job/{Escape(jobId)}", purge ? ("purge", "true") : null), cancellationToken).ConfigureAwait(false);
-        if (response.StatusCode == HttpStatusCode.NotFound)
-            return null;
+        var request = Scoped(Delete($"v1/job/{Escape(jobId)}")).Query("purge", purge ? "true" : null);
 
-        return await ReadRegistrationAsync(response, cancellationToken).ConfigureAwait(false);
+        var registration = await ReadOrNullAsync<JobRegistration>(request, cancellationToken).ConfigureAwait(false);
+        if (registration is not null)
+            NomadLog.JobStopped(Log, jobId, purge, registration.EvalId);
+
+        return registration;
     }
 
     /// <inheritdoc/>
     public async Task<IReadOnlyList<NodeStub>> ListNodesAsync(CancellationToken cancellationToken = default) =>
-        await GetAsync<List<NodeStub>>(Path("v1/nodes"), cancellationToken).ConfigureAwait(false);
+        await ReadAsync<List<NodeStub>>(Scoped(Get("v1/nodes")), cancellationToken).ConfigureAwait(false);
+
+    /// <inheritdoc/>
+    public async Task<NomadPage<NodeStub>> ListNodesAsync(NomadPaging paging, CancellationToken cancellationToken = default) =>
+        await ReadPageAsync(Paged(Scoped(Get("v1/nodes")), paging), NomadJson.Default.ListNodeStub, cancellationToken).ConfigureAwait(false);
 
     /// <inheritdoc/>
     public async Task<string> ReadLogsAsync(string allocationId, string task, LogType type = LogType.Stdout, int tailBytes = 4096, CancellationToken cancellationToken = default)
@@ -174,20 +222,75 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options)
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(tailBytes);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(tailBytes, MaxTailBytes);
 
-        var path = Path($"v1/client/fs/logs/{Escape(allocationId)}",
-            ("task", task),
-            ("type", type == LogType.Stdout ? "stdout" : "stderr"),
-            ("plain", "true"),
-            ("origin", "end"),
-            ("offset", tailBytes.ToString(CultureInfo.InvariantCulture)));
+        var request = Scoped(Get($"v1/client/fs/logs/{Escape(allocationId)}"))
+            .Query("task", task)
+            .Query("type", type == LogType.Stdout ? "stdout" : "stderr")
+            .Query("plain", "true")
+            .Query("origin", "end")
+            .Query("offset", tailBytes.ToString(CultureInfo.InvariantCulture));
 
-        using var response = await http.GetAsync(path, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
-        if (response.StatusCode == HttpStatusCode.NotFound)
+        try
+        {
+            using var response = await request
+                .SendCheckedAsync(HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+
+            return await ReadTailAsync(response, tailBytes, cancellationToken).ConfigureAwait(false);
+        }
+        catch (HttpBuilderException failure) when (failure.StatusCode == HttpStatusCode.NotFound)
+        {
             return string.Empty;
+        }
+        catch (HttpBuilderException failure)
+        {
+            throw Translate(failure);
+        }
+    }
 
-        await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+    private ILogger Log => logger ?? NullLogger<NomadClient>.Instance;
 
-        return await ReadTailAsync(response, tailBytes, cancellationToken).ConfigureAwait(false);
+    /// <summary>Asks for one page instead of the whole list.</summary>
+    private static IHttpRequestBuilder Paged(IHttpRequestBuilder request, NomadPaging paging) =>
+        request
+            .Query("per_page", paging.PageSize > 0 ? paging.PageSize.ToString(CultureInfo.InvariantCulture) : null)
+            .Query("next_token", paging.Token);
+
+    /// <remarks>
+    /// Read with the headers rather than through the typed terminal: the continuation token lives
+    /// in <c>X-Nomad-NextToken</c>, which a deserialized body cannot carry.
+    /// </remarks>
+    private static async Task<NomadPage<T>> ReadPageAsync<T>(
+        IHttpRequestBuilder request, JsonTypeInfo<List<T>> shape, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var response = await request
+                .SendCheckedAsync(HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+
+            var items = await response.Content.ReadFromJsonAsync(shape, cancellationToken).ConfigureAwait(false) ?? [];
+            var next = response.Headers.TryGetValues("X-Nomad-NextToken", out var values) ? values.FirstOrDefault() : null;
+
+            return new NomadPage<T>(items, string.IsNullOrEmpty(next) ? null : next);
+        }
+        catch (HttpBuilderException failure)
+        {
+            throw Translate(failure);
+        }
+        catch (Exception exception) when (exception is JsonException or NotSupportedException)
+        {
+            throw new NomadException(
+                HttpStatusCode.OK, "Nomad returned a body that is not the JSON this call expects.", innerException: exception);
+        }
+    }
+
+    /// <summary>Puts the configured namespace and region on a request; an unset one is skipped.</summary>
+    private IHttpRequestBuilder Scoped(IHttpRequestBuilder request)
+    {
+        var settings = options.Value;
+
+        return request
+            .WithJsonOptions(Json)
+            .Query("namespace", Given(settings.Namespace))
+            .Query("region", Given(settings.Region));
     }
 
     /// <remarks>
@@ -195,52 +298,34 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options)
     /// says the address is not a Nomad agent, and answering with an empty list would report a
     /// misdirected client as an empty cluster.
     /// </remarks>
-    private async Task<T> GetAsync<T>(string path, CancellationToken cancellationToken) where T : class
-    {
-        using var response = await http.GetAsync(path, cancellationToken).ConfigureAwait(false);
-        await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
-
-        return await ReadAsync<T>(response, cancellationToken).ConfigureAwait(false);
-    }
-
-    private async Task<T?> GetOrNullAsync<T>(string path, CancellationToken cancellationToken) where T : class
-    {
-        using var response = await http.GetAsync(path, cancellationToken).ConfigureAwait(false);
-        if (response.StatusCode == HttpStatusCode.NotFound)
-            return null;
-
-        await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
-
-        return await ReadAsync<T>(response, cancellationToken).ConfigureAwait(false);
-    }
-
-    private static async Task<JobRegistration> ReadRegistrationAsync(HttpResponseMessage response, CancellationToken cancellationToken)
-    {
-        await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
-
-        return await ReadAsync<JobRegistration>(response, cancellationToken).ConfigureAwait(false);
-    }
-
-    private static async Task<T> ReadAsync<T>(HttpResponseMessage response, CancellationToken cancellationToken) where T : class
+    private static async Task<T> ReadAsync<T>(IHttpRequestBuilder request, CancellationToken cancellationToken) where T : class
     {
         try
         {
-            return await response.Content.ReadFromJsonAsync<T>(Json, cancellationToken).ConfigureAwait(false)
-                   ?? throw Failure(response, $"Nomad returned an empty {typeof(T).Name}.");
+            return await request.SendAsync<T>(cancellationToken).ConfigureAwait(false)
+                   ?? throw new NomadException(HttpStatusCode.OK, $"Nomad returned an empty {typeof(T).Name}.");
+        }
+        catch (HttpBuilderException failure)
+        {
+            throw Translate(failure);
         }
         catch (Exception exception) when (exception is JsonException or NotSupportedException)
         {
-            throw Failure(response, "Nomad returned a body that is not the JSON this call expects.", exception);
+            throw new NomadException(
+                HttpStatusCode.OK, "Nomad returned a body that is not the JSON this call expects.", innerException: exception);
         }
     }
 
-    private static async Task<string?> LeaderOrFailureAsync(HttpResponseMessage response, CancellationToken cancellationToken)
+    private static async Task<T?> ReadOrNullAsync<T>(IHttpRequestBuilder request, CancellationToken cancellationToken) where T : class
     {
-        var body = await ReadCappedAsync(response, cancellationToken).ConfigureAwait(false);
-        if (body.Contains("no cluster leader", StringComparison.OrdinalIgnoreCase))
+        try
+        {
+            return await ReadAsync<T>(request, cancellationToken).ConfigureAwait(false);
+        }
+        catch (NomadException failure) when (failure.StatusCode == HttpStatusCode.NotFound)
+        {
             return null;
-
-        throw Failure(response, body.Trim());
+        }
     }
 
     private static async Task<string> ReadTailAsync(HttpResponseMessage response, int tailBytes, CancellationToken cancellationToken)
@@ -256,57 +341,19 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options)
         }
     }
 
-    private static async Task EnsureSuccessAsync(HttpResponseMessage response, CancellationToken cancellationToken)
+    private static bool IsElection(HttpBuilderException failure) =>
+        failure.StatusCode == HttpStatusCode.InternalServerError
+        && failure.Body?.Contains("no cluster leader", StringComparison.OrdinalIgnoreCase) == true;
+
+    private static NomadException Translate(HttpBuilderException failure)
     {
-        if (response.IsSuccessStatusCode)
-            return;
+        var status = failure.StatusCode ?? HttpStatusCode.InternalServerError;
+        var message = string.IsNullOrWhiteSpace(failure.Body) ? $"Nomad answered {(int)status}." : failure.Body.Trim();
 
-        var body = await ReadCappedAsync(response, cancellationToken).ConfigureAwait(false);
-
-        throw Failure(response, string.IsNullOrWhiteSpace(body) ? $"Nomad answered {(int)response.StatusCode}." : body.Trim());
+        return new NomadException(status, message, failure.Method, failure.RequestUri, failure);
     }
 
-    /// <remarks>The status is the news; a body that cannot be read must not mask it.</remarks>
-    private static async Task<string> ReadCappedAsync(HttpResponseMessage response, CancellationToken cancellationToken)
-    {
-        try
-        {
-            var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-            await using (stream.ConfigureAwait(false))
-            {
-                using var reader = new StreamReader(stream);
-                var buffer = new char[NomadException.BodyLimit];
-                var read = await reader.ReadBlockAsync(buffer, cancellationToken).ConfigureAwait(false);
-
-                return read < buffer.Length ? new string(buffer, 0, read) : $"{new string(buffer)}…";
-            }
-        }
-        catch (Exception) when (!cancellationToken.IsCancellationRequested)
-        {
-            return string.Empty;
-        }
-    }
-
-    private static NomadException Failure(HttpResponseMessage response, string message, Exception? cause = null) =>
-        new(response.StatusCode, message, response.RequestMessage?.Method, response.RequestMessage?.RequestUri, cause);
-
-    private string Path(string relative, params (string Name, string Value)?[] query)
-    {
-        List<string> parameters = [];
-        var settings = options.Value;
-
-        if (!string.IsNullOrEmpty(settings.Namespace))
-            parameters.Add($"namespace={Escape(settings.Namespace)}");
-        if (!string.IsNullOrEmpty(settings.Region))
-            parameters.Add($"region={Escape(settings.Region)}");
-        foreach (var parameter in query)
-        {
-            if (parameter is (var name, var value))
-                parameters.Add($"{Escape(name)}={Escape(value)}");
-        }
-
-        return parameters.Count == 0 ? relative : $"{relative}?{string.Join('&', parameters)}";
-    }
+    private static string? Given(string? value) => string.IsNullOrEmpty(value) ? null : value;
 
     private static string Escape(string value) => Uri.EscapeDataString(value);
 }

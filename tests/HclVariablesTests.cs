@@ -91,12 +91,15 @@ public sealed class HclVariablesTests
         Assert.Throws<ArgumentException>(() => HclVariables.Literal(cycle));
     }
 
+    /// <summary>It used to render as a list of pairs; reading it back would take reflection.</summary>
     [Fact]
-    public void Literal_WithADictionaryThatOnlyReadsBack_RendersAMap()
+    public void Literal_WithADictionaryThatOnlyReadsBack_SaysSoInsteadOfRenderingPairs()
     {
         var map = new ReadOnlyOnly(new Dictionary<string, object?> { ["port"] = 8803 });
 
-        Assert.Equal("{ \"port\" = 8803 }", HclVariables.Literal(map));
+        var failure = Assert.Throws<ArgumentException>(() => HclVariables.Literal(map));
+
+        Assert.Contains("IDictionary", failure.Message, StringComparison.Ordinal);
     }
 
     [Fact]

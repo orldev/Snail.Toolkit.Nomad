@@ -3,6 +3,10 @@ using System.Net;
 namespace Snail.Toolkit.Nomad;
 
 /// <summary>Nomad answered with an error status; the message carries the body Nomad returned (plain text).</summary>
+/// <remarks>
+/// The body arrives already cut by the transport, so a misdirected address answering with megabytes
+/// cannot reach memory through this message.
+/// </remarks>
 public sealed class NomadException(
     HttpStatusCode statusCode,
     string message,
@@ -10,12 +14,6 @@ public sealed class NomadException(
     Uri? requestUri = null,
     Exception? innerException = null) : Exception(message, innerException)
 {
-    /// <summary>Longest error body kept; a longer one is cut and marked with an ellipsis.</summary>
-    /// <remarks>
-    /// A misdirected address can answer with megabytes, and the status is the news either way.
-    /// </remarks>
-    public const int BodyLimit = 4096;
-
     /// <summary>HTTP status of the failed call.</summary>
     public HttpStatusCode StatusCode { get; } = statusCode;
 

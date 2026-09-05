@@ -1,14 +1,16 @@
 using System.Net;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Snail.Toolkit.Nomad.Extensions;
+using Snail.Toolkit.Nomad.Models;
 
 namespace Snail.Toolkit.Nomad.Tests;
 
 public sealed class NomadClientTests
 {
     [Fact]
-    public async Task Token_travels_as_header_and_namespace_as_query()
+    public async Task Request_WithATokenAndANamespace_SendsTheHeaderAndTheQuery()
     {
         var handler = new RecordingHandler(HttpStatusCode.OK, "[]");
         var client = RecordingHandler.Client(handler, options =>
@@ -25,7 +27,7 @@ public sealed class NomadClientTests
     }
 
     [Fact]
-    public async Task Parse_sends_hcl_and_var_file_string()
+    public async Task ParseJob_WithVariables_SendsTheHclAndTheVarFile()
     {
         var handler = new RecordingHandler(HttpStatusCode.OK, """{"ID":"mcp-search","TaskGroups":[{"Name":"server","Count":1}]}""");
         var client = RecordingHandler.Client(handler);
@@ -40,7 +42,7 @@ public sealed class NomadClientTests
     }
 
     [Fact]
-    public async Task Register_wraps_the_job_and_reads_the_evaluation()
+    public async Task RegisterJob_WithAParsedJob_WrapsItAndReadsTheEvaluation()
     {
         var handler = new RecordingHandler(HttpStatusCode.OK, """{"EvalID":"e-1","JobModifyIndex":8,"Warnings":""}""");
         var client = RecordingHandler.Client(handler);
@@ -55,7 +57,7 @@ public sealed class NomadClientTests
     }
 
     [Fact]
-    public async Task Missing_job_reads_as_null()
+    public async Task ReadsByJobId_WhenNomadDoesNotKnowIt_AnswerNull()
     {
         var client = RecordingHandler.Client(new RecordingHandler(HttpStatusCode.NotFound, "job not found"));
 
@@ -66,7 +68,7 @@ public sealed class NomadClientTests
     }
 
     [Fact]
-    public async Task Job_is_read_with_groups_and_times()
+    public async Task GetJob_WithGroupsAndATimestamp_ReadsThemBack()
     {
         var client = RecordingHandler.Client(new RecordingHandler(HttpStatusCode.OK, """
             {"ID":"mcp-search","Name":"mcp-search","Namespace":"default","Type":"service","Status":"running","StatusDescription":"",
@@ -82,7 +84,7 @@ public sealed class NomadClientTests
     }
 
     [Fact]
-    public async Task Job_list_carries_the_summary()
+    public async Task ListJobs_WhenAStubCarriesASummary_ReadsTheCounts()
     {
         var client = RecordingHandler.Client(new RecordingHandler(HttpStatusCode.OK, """
             [{"ID":"mcp-search","Name":"mcp-search","Namespace":"default","Type":"service","Status":"running","StatusDescription":"","Stop":false,
@@ -96,7 +98,7 @@ public sealed class NomadClientTests
     }
 
     [Fact]
-    public async Task Error_status_becomes_a_nomad_exception_with_the_body()
+    public async Task Call_WithAnErrorStatus_ThrowsNomadExceptionCarryingTheBody()
     {
         var client = RecordingHandler.Client(new RecordingHandler(HttpStatusCode.InternalServerError, "job scaling blocked due to active deployment"));
 
@@ -107,7 +109,7 @@ public sealed class NomadClientTests
     }
 
     [Fact]
-    public async Task Stop_with_purge_adds_the_flag()
+    public async Task StopJob_WithPurge_AddsTheFlag()
     {
         var handler = new RecordingHandler(HttpStatusCode.OK, """{"EvalID":"e-2","JobModifyIndex":12}""");
         var client = RecordingHandler.Client(handler);
@@ -120,7 +122,7 @@ public sealed class NomadClientTests
     }
 
     [Fact]
-    public async Task Logs_are_read_from_the_end_as_plain_text()
+    public async Task ReadLogs_WithATail_ReadsFromTheEndAsPlainText()
     {
         var handler = new RecordingHandler(HttpStatusCode.OK, "last lines");
         var client = RecordingHandler.Client(handler);
@@ -133,7 +135,7 @@ public sealed class NomadClientTests
     }
 
     [Fact]
-    public void AddNomad_binds_options_and_resolves_the_client()
+    public void AddNomad_WithAConfiguration_ResolvesTheClient()
     {
         var services = new ServiceCollection();
         services.AddNomad(TestConfiguration.Get("http://nomad.local:4646/", token: "t"));
@@ -145,11 +147,48 @@ public sealed class NomadClientTests
     }
 
     [Fact]
-    public void AddNomad_without_address_throws()
+    public void AddNomad_RegistersEachHalfOfTheContract()
     {
         var services = new ServiceCollection();
+        services.AddNomad(TestConfiguration.Get());
 
-        Assert.Throws<InvalidOperationException>(() => services.AddNomad(TestConfiguration.Get(address: null)));
+        using var provider = services.BuildServiceProvider();
+
+        Assert.IsType<NomadClient>(provider.GetRequiredService<INomadStatus>());
+        Assert.IsType<NomadClient>(provider.GetRequiredService<INomadJobs>());
+        Assert.IsType<NomadClient>(provider.GetRequiredService<INomadScheduling>());
+        Assert.IsType<NomadClient>(provider.GetRequiredService<INomadNodes>());
+        Assert.IsType<NomadClient>(provider.GetRequiredService<INomadLogs>());
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("nomad.local:4646")]
+    [InlineData("ftp://nomad.local")]
+    public void AddNomad_WithAnAddressThatIsNotAnHttpUrl_FailsValidation(string? address)
+    {
+        var services = new ServiceCollection();
+        services.AddNomad(TestConfiguration.Get(address));
+
+        using var provider = services.BuildServiceProvider();
+
+        Assert.Throws<OptionsValidationException>(() => provider.GetRequiredService<IOptions<NomadOptions>>().Value);
+    }
+
+    [Fact]
+    public void AddNomad_WithATimeoutThatIsNotPositive_FailsValidation()
+    {
+        var services = new ServiceCollection();
+        services.AddNomad(options =>
+        {
+            options.Address = "http://nomad.local:4646";
+            options.Timeout = TimeSpan.Zero;
+        });
+
+        using var provider = services.BuildServiceProvider();
+
+        Assert.Throws<OptionsValidationException>(() => provider.GetRequiredService<IOptions<NomadOptions>>().Value);
     }
 
     /// <summary>An address that is not a Nomad agent answers 404 to everything.</summary>
@@ -227,7 +266,7 @@ public sealed class NomadClientTests
 
         var exception = await Assert.ThrowsAsync<NomadException>(() => client.ListJobsAsync());
 
-        Assert.Equal(NomadException.BodyLimit + 1, exception.Message.Length);
+        Assert.True(exception.Message.Length < 5_000, $"the body was kept whole at {exception.Message.Length} characters");
         Assert.EndsWith("…", exception.Message, StringComparison.Ordinal);
     }
 
@@ -259,6 +298,32 @@ public sealed class NomadClientTests
             """));
 
         await Assert.ThrowsAsync<NomadException>(() => client.GetJobAsync("mcp-search"));
+    }
+
+    [Fact]
+    public async Task ListJobs_WithPaging_AsksForOnePageAndReadsTheContinuation()
+    {
+        var handler = new RecordingHandler(HttpStatusCode.OK, "[]", ("X-Nomad-NextToken", "eyJ0IjoxfQ"));
+        var client = RecordingHandler.Client(handler);
+
+        var page = await client.ListJobsAsync(new NomadPaging(50), "mcp-");
+
+        Assert.Equal("eyJ0IjoxfQ", page.NextToken);
+        Assert.True(page.HasMore);
+        Assert.Equal("http://nomad.test:4646/v1/jobs?prefix=mcp-&per_page=50", handler.Requests.Single().RequestUri!.ToString());
+    }
+
+    [Fact]
+    public async Task ListNodes_OnTheLastPage_HasNoContinuation()
+    {
+        var handler = new RecordingHandler(HttpStatusCode.OK, "[]");
+        var client = RecordingHandler.Client(handler);
+
+        var page = await client.ListNodesAsync(new NomadPaging(10, "eyJ0IjoxfQ"));
+
+        Assert.Null(page.NextToken);
+        Assert.False(page.HasMore);
+        Assert.Equal("http://nomad.test:4646/v1/nodes?per_page=10&next_token=eyJ0IjoxfQ", handler.Requests.Single().RequestUri!.ToString());
     }
 
     /// <summary>An ACL that hides the configuration still lets the agent answer.</summary>
