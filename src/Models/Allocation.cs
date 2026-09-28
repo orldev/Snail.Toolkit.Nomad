@@ -3,12 +3,16 @@ using System.Text.Json.Serialization;
 namespace Snail.Toolkit.Nomad.Models;
 
 /// <summary>State of one task inside an allocation.</summary>
+/// <remarks>
+/// Both times are null while they have not happened: Nomad 2.0.7 sends <c>"FinishedAt": null</c> for a running task and
+/// <c>"StartedAt": null</c> for a pending one, and a non-nullable time failed the whole allocation list on them.
+/// </remarks>
 public sealed record AllocationTaskState(
     string State = "",
     bool Failed = false,
     int Restarts = 0,
-    DateTimeOffset StartedAt = default,
-    DateTimeOffset FinishedAt = default);
+    DateTimeOffset? StartedAt = null,
+    DateTimeOffset? FinishedAt = null);
 
 /// <summary>One allocation of a job, from /v1/job/:id/allocations.</summary>
 public sealed record Allocation(

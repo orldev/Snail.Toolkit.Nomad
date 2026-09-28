@@ -67,6 +67,24 @@ public sealed class NomadClientTests
         Assert.Empty(await client.ListAllocationsAsync("nope"));
     }
 
+    /// <summary>Nomad 2.0.7, a running task: FinishedAt and LastRestart are null, and the list failed whole on them.</summary>
+    [Fact]
+    public async Task ListAllocations_RunningTask_ReadsItWithNoFinishTime()
+    {
+        var client = RecordingHandler.Client(new RecordingHandler(HttpStatusCode.OK, """
+            [{"ID":"0ba5b63e","Name":"mcp-sandbox.server[0]","JobID":"mcp-sandbox","TaskGroup":"server","NodeID":"03e76242",
+              "ClientStatus":"running","DesiredStatus":"run","CreateTime":1788434852078152633,"ModifyTime":1788434852078152633,
+              "TaskStates":{"mcp":{"State":"running","Failed":false,"Restarts":0,"LastRestart":null,
+                                   "StartedAt":"2026-09-28T12:52:03.150877751Z","FinishedAt":null}}}]
+            """));
+
+        var state = Assert.Single(await client.ListAllocationsAsync("mcp-sandbox")).TaskStates!["mcp"];
+
+        Assert.Equal("running", state.State);
+        Assert.NotNull(state.StartedAt);
+        Assert.Null(state.FinishedAt);
+    }
+
     [Fact]
     public async Task GetJob_WithGroupsAndATimestamp_ReadsThemBack()
     {
