@@ -1,0 +1,15 @@
+<Project>
+
+  <!-- The rest of the build — language, nullable, docs, analyzers, warnings as errors — is Snail.Sdk's (global.json). -->
+
+  <!--
+    Migration debt, to be paid before the first release:
+    RS0026 (22: the two overloads of ListJobsAsync, ListAllocationsAsync, ListEvaluationsAsync, ListNodesAsync and
+    RegisterJobAsync on INomadClient and on NomadClient, and of AddNomad) — overloads that both take optional parameters.
+    Removing a default changes how every caller writes the call, a decision about the API rather than a migration.
+  -->
+  <PropertyGroup>
+    <NoWarn>$(NoWarn);RS0026</NoWarn>
+  </PropertyGroup>
+
+</Project>

@@ -6,8 +6,8 @@ public sealed record NomadAgent(
     string Version,
     string Datacenter,
     string Region,
-    bool ServerEnabled,
-    bool ClientEnabled);
+    bool IsServerEnabled,
+    bool IsClientEnabled);
 
 /// <summary>What /v1/agent/self answers, as it is written on the wire.</summary>
 /// <remarks>

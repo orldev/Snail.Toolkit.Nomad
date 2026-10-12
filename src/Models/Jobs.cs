@@ -47,7 +47,7 @@ public sealed record JobStub(
     string Type,
     string Status,
     string StatusDescription = "",
-    bool Stop = false,
+    [property: JsonPropertyName("Stop")] bool IsStopped = false,
     long SubmitTime = 0,
     JobSummary? JobSummary = null)
 {
@@ -67,7 +67,7 @@ public sealed record NomadJob(
     string Status,
     string StatusDescription,
     ulong Version,
-    bool Stop,
+    [property: JsonPropertyName("Stop")] bool IsStopped,
     long SubmitTime,
     IReadOnlyList<TaskGroupStub> TaskGroups,
     IReadOnlyDictionary<string, string>? Meta = null)

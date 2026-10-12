@@ -1,4 +1,7 @@
 <Solution>
+  <Folder Name="/benchmarks/">
+    <Project Path="benchmarks/Snail.Toolkit.Nomad.Benchmarks/Snail.Toolkit.Nomad.Benchmarks.csproj" />
+  </Folder>
   <Folder Name="/src/">
     <Project Path="src/Snail.Toolkit.Nomad.csproj" />
   </Folder>

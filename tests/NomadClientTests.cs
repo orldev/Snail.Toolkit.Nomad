@@ -388,6 +388,6 @@ public sealed class NomadClientTests
 
         Assert.Equal("srv-1", agent.Name);
         Assert.Equal("", agent.Version);
-        Assert.False(agent.ServerEnabled);
+        Assert.False(agent.IsServerEnabled);
     }
 }

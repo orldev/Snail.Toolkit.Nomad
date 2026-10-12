@@ -67,12 +67,16 @@ public sealed class NomadIntegrationTests(NomadContainerFixture fixture) : IClas
         var agent = await client.GetAgentAsync();
         var leader = await client.GetLeaderAsync();
 
-        Assert.True(agent.ServerEnabled);
-        Assert.False(agent.ClientEnabled);
+        Assert.True(agent.IsServerEnabled);
+        Assert.False(agent.IsClientEnabled);
         Assert.NotEmpty(agent.Version);
         Assert.NotNull(leader);
     }
 
+    /// <remarks>
+    /// Without a client node the allocation stays queued and the evaluation is blocked on the group; the scheduler
+    /// writes both a moment after the registration answers.
+    /// </remarks>
     [IntegrationFact]
     public async Task Job_ParsedRegisteredAndStopped_RoundTripsThroughNomad()
     {
@@ -97,8 +101,6 @@ public sealed class NomadIntegrationTests(NomadContainerFixture fixture) : IClas
         var listed = await client.ListJobsAsync("mcp-it-");
         Assert.Contains(listed, stub => stub.Id == jobId);
 
-        // Without a client node the allocation stays queued and the evaluation is blocked on the group;
-        // the scheduler writes both a moment after the registration answers.
         var summary = await PollAsync(
             () => client.GetJobSummaryAsync(jobId),
             summary => summary?.Summary.GetValueOrDefault("server")?.Queued == 1);

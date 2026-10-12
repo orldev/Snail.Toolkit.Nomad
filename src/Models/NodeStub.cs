@@ -10,7 +10,7 @@ public sealed record NodeStub(
     string NodeClass = "",
     string Status = "",
     string StatusDescription = "",
-    bool Drain = false,
+    [property: JsonPropertyName("Drain")] bool IsDraining = false,
     string SchedulingEligibility = "",
     string Version = "",
     string Address = "")
@@ -18,6 +18,6 @@ public sealed record NodeStub(
     /// <summary>The node is up and accepts placements.</summary>
     public bool IsReady =>
         string.Equals(Status, "ready", StringComparison.OrdinalIgnoreCase)
-        && !Drain
+        && !IsDraining
         && string.Equals(SchedulingEligibility, "eligible", StringComparison.OrdinalIgnoreCase);
 }
