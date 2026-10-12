@@ -127,4 +127,46 @@ public sealed class HclVariablesTests
 
         IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
     }
+
+    /// <summary>
+    /// Every UTF-16 code unit, and every sign before a brace, quoted as the escaping of one string per
+    /// character used to quote it.
+    /// </summary>
+    [Fact]
+    public void Render_EveryCharacter_QuotesAsBefore()
+    {
+        var everyCharacter = new string([.. Enumerable.Range(0, char.MaxValue + 1).Select(code => (char)code)]);
+        string[] values = [everyCharacter, "${a} %{b} $${c} %%{d} $ % { } ${", "end$", "end%", "{${%{"];
+
+        foreach (var value in values)
+        {
+            var rendered = HclVariables.Render(new Dictionary<string, object?> { ["v"] = value });
+
+            Assert.Equal($"v = {QuotedAsBefore(value)}", rendered.TrimEnd('\n'));
+        }
+    }
+
+    private static string QuotedAsBefore(string text)
+    {
+        var builder = new System.Text.StringBuilder(text.Length + 2).Append('"');
+        for (var index = 0; index < text.Length; index++)
+        {
+            var character = text[index];
+            var opensTemplate = character is '$' or '%' && index + 1 < text.Length && text[index + 1] == '{';
+
+            builder.Append(character switch
+            {
+                _ when opensTemplate => $"{character}{character}",
+                '"' => "\\\"",
+                '\\' => "\\\\",
+                '\n' => "\\n",
+                '\r' => "\\r",
+                '\t' => "\\t",
+                _ when char.IsControl(character) => $"\\u{(int)character:x4}",
+                _ => character.ToString()
+            });
+        }
+
+        return builder.Append('"').ToString();
+    }
 }

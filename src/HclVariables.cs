@@ -94,17 +94,36 @@ public static class HclVariables
             var character = text[index];
             var opensTemplate = character is '$' or '%' && index + 1 < text.Length && text[index + 1] == '{';
 
-            builder.Append(character switch
+            if (opensTemplate)
             {
-                _ when opensTemplate => $"{character}{character}",
-                '"' => "\\\"",
-                '\\' => "\\\\",
-                '\n' => "\\n",
-                '\r' => "\\r",
-                '\t' => "\\t",
-                _ when char.IsControl(character) => $"\\u{(int)character:x4}",
-                _ => character.ToString()
-            });
+                builder.Append(character).Append(character);
+                continue;
+            }
+
+            switch (character)
+            {
+                case '"':
+                    builder.Append("\\\"");
+                    break;
+                case '\\':
+                    builder.Append("\\\\");
+                    break;
+                case '\n':
+                    builder.Append("\\n");
+                    break;
+                case '\r':
+                    builder.Append("\\r");
+                    break;
+                case '\t':
+                    builder.Append("\\t");
+                    break;
+                case var control when char.IsControl(control):
+                    builder.Append(CultureInfo.InvariantCulture, $"\\u{(int)control:x4}");
+                    break;
+                default:
+                    builder.Append(character);
+                    break;
+            }
         }
 
         return builder.Append('"').ToString();

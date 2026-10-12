@@ -445,11 +445,7 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options,
         var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         await using (stream.ConfigureAwait(false))
         {
-            using var reader = new StreamReader(stream);
-            var buffer = new char[tailBytes];
-            var read = await reader.ReadBlockAsync(buffer, cancellationToken).ConfigureAwait(false);
-
-            return new string(buffer, 0, read);
+            return await LogTail.ReadAsync(stream, tailBytes, cancellationToken).ConfigureAwait(false);
         }
     }
 
