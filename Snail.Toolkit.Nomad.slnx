@@ -6,6 +6,7 @@
     <Project Path="src/Snail.Toolkit.Nomad.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/Snail.Toolkit.Nomad.NativeProbe/Snail.Toolkit.Nomad.NativeProbe.csproj" />
     <Project Path="tests/Snail.Toolkit.Nomad.Tests.csproj" />
   </Folder>
 </Solution>

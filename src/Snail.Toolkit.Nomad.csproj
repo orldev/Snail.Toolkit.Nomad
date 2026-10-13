@@ -13,7 +13,6 @@
         <PackageReadmeFile>README.md</PackageReadmeFile>
         <PackageLicenseExpression>MIT</PackageLicenseExpression>
         <EnableConfigurationBindingGenerator>true</EnableConfigurationBindingGenerator>
-        <SnailNotNativeBecause>Snail.Toolkit.HttpBuilder.Extensions 0.3.0, which carries every request, serializes through the reflection-based JSON entry points and warns (IL2104, IL3053) in a native app; native once a release of it takes JsonTypeInfo and the calls here pass NomadJson.</SnailNotNativeBecause>
         <Version>0.2.1</Version>
     </PropertyGroup>
 

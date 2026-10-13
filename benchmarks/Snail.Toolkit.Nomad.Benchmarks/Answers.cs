@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.Options;
 
 namespace Snail.Toolkit.Nomad.Benchmarks;
@@ -60,15 +61,66 @@ public static class Answers
         ["template"] = "{{ with secret \"kv/data/web\" }}{{ .Data.data.password }}{{ end }} %{ if true }x%{ endif }"
     };
 
-    /// <summary>Answers every request with the same body, a fresh response each time as a socket would give.</summary>
+    public static JsonObject Job(int groups)
+    {
+        var job = new JsonObject
+        {
+            ["ID"] = "web",
+            ["Name"] = "web",
+            ["Namespace"] = "default",
+            ["Type"] = "service",
+            ["Priority"] = 50,
+            ["Datacenters"] = new JsonArray("dc1", "dc2"),
+            ["Meta"] = new JsonObject { ["owner"] = "team-web", ["tier"] = "frontend" }
+        };
+
+        var taskGroups = new JsonArray();
+        for (var i = 0; i < groups; i++)
+        {
+            var task = new JsonObject
+            {
+                ["Name"] = $"server-{i}",
+                ["Driver"] = "docker",
+                ["Config"] = new JsonObject
+                {
+                    ["image"] = "registry.example.com/team/web:2026.10.12-rc1",
+                    ["ports"] = new JsonArray("http", "https"),
+                    ["args"] = new JsonArray("--listen", "0.0.0.0:8080", "--log-level", "info")
+                },
+                ["Env"] = new JsonObject { ["LOG_LEVEL"] = "info", ["FEATURE_FLAGS"] = "a,b,c" },
+                ["Resources"] = new JsonObject { ["CPU"] = 500, ["MemoryMB"] = 512 }
+            };
+
+            taskGroups.Add(new JsonObject
+            {
+                ["Name"] = $"group-{i}",
+                ["Count"] = 3,
+                ["Tasks"] = new JsonArray(task)
+            });
+        }
+
+        job["TaskGroups"] = taskGroups;
+
+        return job;
+    }
+
+    public static byte[] Registration() => """{"EvalID":"3c5f1a2b-0d4e-4f6a-8b9c-1d2e3f4a5b6c","JobModifyIndex":42,"Warnings":""}"""u8.ToArray();
+
+    /// <summary>
+    /// Answers every request with the same body, a fresh response each time as a socket would give, after reading
+    /// what was sent as a socket would: a body is written only when it is read.
+    /// </summary>
     private sealed class Canned(byte[] body, string mediaType) : HttpMessageHandler
     {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
+            if (request.Content is not null)
+                await request.Content.CopyToAsync(Stream.Null, cancellationToken).ConfigureAwait(false);
+
             var content = new ByteArrayContent(body);
             content.Headers.ContentType = new MediaTypeHeaderValue(mediaType) { CharSet = "utf-8" };
 
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = content, RequestMessage = request });
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = content, RequestMessage = request };
         }
     }
 }

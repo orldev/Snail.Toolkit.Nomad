@@ -33,17 +33,10 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options,
     /// </remarks>
     public const int MaxTailBytes = 1024 * 1024;
 
-    /// <remarks>
-    /// The generated metadata of <see cref="NomadJson"/>, so the models survive trimming and their
-    /// own signatures stay the contract: a non-nullable member fed null, or a parameter without a
-    /// default left unsent, fails the read instead of arriving as a null the type forbids.
-    /// </remarks>
-    private static readonly JsonSerializerOptions Json = NomadJson.Default.Options;
-
     /// <inheritdoc/>
     public async Task<NomadAgent> GetAgentAsync(CancellationToken cancellationToken = default)
     {
-        var self = await ReadAsync<AgentSelf>(Scoped(Get("v1/agent/self")), cancellationToken).ConfigureAwait(false);
+        var self = await ReadAsync(Scoped(Get("v1/agent/self")), NomadJson.Default.AgentSelf, cancellationToken).ConfigureAwait(false);
         var config = self.Config;
 
         return new NomadAgent(
@@ -60,7 +53,7 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options,
     {
         try
         {
-            var leader = await Scoped(Get("v1/status/leader")).SendAsync<string>(cancellationToken).ConfigureAwait(false);
+            var leader = await Scoped(Get("v1/status/leader")).SendAsync(NomadJson.Default.String, cancellationToken).ConfigureAwait(false);
 
             return string.IsNullOrEmpty(leader) ? null : leader;
         }
@@ -87,7 +80,9 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options,
         if (!string.IsNullOrEmpty(variables))
             request["Variables"] = variables;
 
-        return await ReadAsync<JsonObject>(Scoped(Post("v1/jobs/parse")).AsJson(request, Json), cancellationToken).ConfigureAwait(false);
+        return await ReadAsync(
+            Scoped(Post("v1/jobs/parse")).AsJson(request, NomadJson.Default.JsonObject),
+            NomadJson.Default.JsonObject, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -97,8 +92,9 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options,
 
         var request = new JsonObject { ["Job"] = job.DeepClone() };
 
-        var registration = await ReadAsync<JobRegistration>(
-            Scoped(Post("v1/jobs")).AsJson(request, Json), cancellationToken).ConfigureAwait(false);
+        var registration = await ReadAsync(
+            Scoped(Post("v1/jobs")).AsJson(request, NomadJson.Default.JsonObject),
+            NomadJson.Default.JobRegistration, cancellationToken).ConfigureAwait(false);
 
         NomadLog.JobRegistered(Log, job["ID"]?.ToString() ?? "", registration.EvalId);
 
@@ -119,8 +115,9 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options,
 
         try
         {
-            var registration = await ReadAsync<JobRegistration>(
-                Scoped(Post("v1/jobs")).AsJson(request, Json), cancellationToken).ConfigureAwait(false);
+            var registration = await ReadAsync(
+                Scoped(Post("v1/jobs")).AsJson(request, NomadJson.Default.JsonObject),
+                NomadJson.Default.JobRegistration, cancellationToken).ConfigureAwait(false);
 
             NomadLog.JobRegistered(Log, job["ID"]?.ToString() ?? "", registration.EvalId);
 
@@ -137,12 +134,14 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options,
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(jobId);
 
-        return await ReadOrNullAsync<NomadJob>(Scoped(Get($"v1/job/{Escape(jobId)}")), cancellationToken).ConfigureAwait(false);
+        return await ReadOrNullAsync(
+            Scoped(Get($"v1/job/{Escape(jobId)}")), NomadJson.Default.NomadJob, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
     public async Task<IReadOnlyList<JobStub>> ListJobsAsync(string? prefix = null, CancellationToken cancellationToken = default) =>
-        await ReadAsync<List<JobStub>>(Scoped(Get("v1/jobs")).Query("prefix", prefix), cancellationToken).ConfigureAwait(false);
+        await ReadAsync(
+            Scoped(Get("v1/jobs")).Query("prefix", prefix), NomadJson.Default.ListJobStub, cancellationToken).ConfigureAwait(false);
 
     /// <inheritdoc/>
     public async Task<NomadPage<JobStub>> ListJobsAsync(NomadPaging paging, string? prefix = null, CancellationToken cancellationToken = default) =>
@@ -161,7 +160,8 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options,
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(jobId);
 
-        return await ReadOrNullAsync<JobSummary>(Scoped(Get($"v1/job/{Escape(jobId)}/summary")), cancellationToken).ConfigureAwait(false);
+        return await ReadOrNullAsync(
+            Scoped(Get($"v1/job/{Escape(jobId)}/summary")), NomadJson.Default.JobSummary, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -169,8 +169,8 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options,
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(jobId);
 
-        var allocations = await ReadOrNullAsync<List<Allocation>>(
-            Scoped(Get($"v1/job/{Escape(jobId)}/allocations")), cancellationToken).ConfigureAwait(false);
+        var allocations = await ReadOrNullAsync(
+            Scoped(Get($"v1/job/{Escape(jobId)}/allocations")), NomadJson.Default.ListAllocation, cancellationToken).ConfigureAwait(false);
 
         return allocations?.OrderByDescending(allocation => allocation.CreateTime).ToList() ?? [];
     }
@@ -198,8 +198,8 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options,
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(jobId);
 
-        var evaluations = await ReadOrNullAsync<List<Evaluation>>(
-            Scoped(Get($"v1/job/{Escape(jobId)}/evaluations")), cancellationToken).ConfigureAwait(false);
+        var evaluations = await ReadOrNullAsync(
+            Scoped(Get($"v1/job/{Escape(jobId)}/evaluations")), NomadJson.Default.ListEvaluation, cancellationToken).ConfigureAwait(false);
 
         return evaluations?.OrderByDescending(evaluation => evaluation.CreateTime).ToList() ?? [];
     }
@@ -228,8 +228,9 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options,
             ["Message"] = message
         };
 
-        var registration = await ReadAsync<JobRegistration>(
-            Scoped(Post($"v1/job/{Escape(jobId)}/scale")).AsJson(request, Json), cancellationToken).ConfigureAwait(false);
+        var registration = await ReadAsync(
+            Scoped(Post($"v1/job/{Escape(jobId)}/scale")).AsJson(request, NomadJson.Default.JsonObject),
+            NomadJson.Default.JobRegistration, cancellationToken).ConfigureAwait(false);
 
         NomadLog.JobScaled(Log, jobId, taskGroup, count, registration.EvalId);
 
@@ -243,7 +244,7 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options,
 
         var request = Scoped(Delete($"v1/job/{Escape(jobId)}")).Query("purge", purge ? "true" : null);
 
-        var registration = await ReadOrNullAsync<JobRegistration>(request, cancellationToken).ConfigureAwait(false);
+        var registration = await ReadOrNullAsync(request, NomadJson.Default.JobRegistration, cancellationToken).ConfigureAwait(false);
         if (registration is not null)
             NomadLog.JobStopped(Log, jobId, purge, registration.EvalId);
 
@@ -252,7 +253,7 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options,
 
     /// <inheritdoc/>
     public async Task<IReadOnlyList<NodeStub>> ListNodesAsync(CancellationToken cancellationToken = default) =>
-        await ReadAsync<List<NodeStub>>(Scoped(Get("v1/nodes")), cancellationToken).ConfigureAwait(false);
+        await ReadAsync(Scoped(Get("v1/nodes")), NomadJson.Default.ListNodeStub, cancellationToken).ConfigureAwait(false);
 
     /// <inheritdoc/>
     public async Task<NomadPage<NodeStub>> ListNodesAsync(NomadPaging paging, CancellationToken cancellationToken = default) =>
@@ -400,21 +401,24 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options,
         var settings = options.Value;
 
         return request
-            .WithJsonOptions(Json)
             .Query("namespace", Given(settings.Namespace))
             .Query("region", Given(settings.Region));
     }
 
     /// <remarks>
+    /// The shape is the generated metadata of <see cref="NomadJson"/>, so the models survive trimming
+    /// and their own signatures stay the contract: a non-nullable member fed null, or a parameter
+    /// without a default left unsent, fails the read instead of arriving as a null the type forbids.
     /// A 404 here says the path names no such object. On an endpoint that takes no identifier it
     /// says the address is not a Nomad agent, and answering with an empty list would report a
     /// misdirected client as an empty cluster.
     /// </remarks>
-    private static async Task<T> ReadAsync<T>(IHttpRequestBuilder request, CancellationToken cancellationToken) where T : class
+    private static async Task<T> ReadAsync<T>(IHttpRequestBuilder request, JsonTypeInfo<T> shape, CancellationToken cancellationToken)
+        where T : class
     {
         try
         {
-            return await request.SendAsync<T>(cancellationToken).ConfigureAwait(false)
+            return await request.SendAsync(shape, cancellationToken).ConfigureAwait(false)
                    ?? throw new NomadException(HttpStatusCode.OK, $"Nomad returned an empty {typeof(T).Name}.");
         }
         catch (HttpBuilderException failure)
@@ -428,11 +432,12 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options,
         }
     }
 
-    private static async Task<T?> ReadOrNullAsync<T>(IHttpRequestBuilder request, CancellationToken cancellationToken) where T : class
+    private static async Task<T?> ReadOrNullAsync<T>(IHttpRequestBuilder request, JsonTypeInfo<T> shape, CancellationToken cancellationToken)
+        where T : class
     {
         try
         {
-            return await ReadAsync<T>(request, cancellationToken).ConfigureAwait(false);
+            return await ReadAsync(request, shape, cancellationToken).ConfigureAwait(false);
         }
         catch (NomadException failure) when (failure.StatusCode == HttpStatusCode.NotFound)
         {

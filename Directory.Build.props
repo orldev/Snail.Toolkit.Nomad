@@ -12,4 +12,13 @@
     <NoWarn>$(NoWarn);RS0026</NoWarn>
   </PropertyGroup>
 
+  <!--
+    Migration debt, until Snail.Toolkit.HttpBuilder.Extensions 0.4.0 is on NuGet: the library takes 0.4.0-local.1 from the
+    local feed, and a package of a stable version may not depend on a prerelease (NU5104). The release step moves the
+    dependency to 0.4.0 and removes this line.
+  -->
+  <PropertyGroup>
+    <NoWarn>$(NoWarn);NU5104</NoWarn>
+  </PropertyGroup>
+
 </Project>
