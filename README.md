@@ -1,4 +1,4 @@
-## Snail.Toolkit.Nomad
+# Snail.Toolkit.Nomad
 
 Typed client for the [HashiCorp Nomad HTTP API](https://developer.hashicorp.com/nomad/api-docs) for .NET 10, with Microsoft-only dependencies:
 
