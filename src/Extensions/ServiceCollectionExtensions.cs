@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -29,9 +30,13 @@ public static class ServiceCollectionExtensions
                 settings => settings.Timeout > TimeSpan.Zero,
                 $"'{NomadOptions.SectionName}:{nameof(NomadOptions.Timeout)}' has to be positive.")
             .Validate(
-                settings => settings.WatchWait > TimeSpan.Zero && settings.WatchWait < settings.Timeout,
-                $"'{NomadOptions.SectionName}:{nameof(NomadOptions.WatchWait)}' has to be positive and shorter than "
-                + $"'{NomadOptions.SectionName}:{nameof(NomadOptions.Timeout)}', or a watch would be cut off by it.")
+                settings => settings.WatchWait > TimeSpan.Zero && settings.WatchWait * 17 / 16 < settings.Timeout,
+                $"'{NomadOptions.SectionName}:{nameof(NomadOptions.WatchWait)}' has to be positive and leave room under "
+                + $"'{NomadOptions.SectionName}:{nameof(NomadOptions.Timeout)}' for the sixteenth Nomad adds as jitter, "
+                + "or a watch would be cut off by the timeout.")
+            .Validate(
+                settings => settings.WatchRetry is null or { Ticks: > 0 },
+                $"'{NomadOptions.SectionName}:{nameof(NomadOptions.WatchRetry)}' has to be positive when set.")
             .ValidateOnStart();
 
     extension(IServiceCollection services)
@@ -43,6 +48,7 @@ public static class ServiceCollectionExtensions
         /// would resend <c>POST /v1/jobs</c> and register a job twice. Reads and a stop are safe to
         /// retry; a registration only is when it carries an index.
         /// </remarks>
+        [SuppressMessage("ApiDesign", "RS0026:Do not add multiple public overloads with optional parameters", Justification = "Settings bound from configuration or written in code are the two sources every Microsoft.Extensions registration offers; the required first argument tells them apart.")]
         public IServiceCollection AddNomad(IConfiguration configuration, Action<IHttpClientBuilder>? configureClient = null)
         {
             ArgumentNullException.ThrowIfNull(services);
@@ -54,6 +60,7 @@ public static class ServiceCollectionExtensions
         }
 
         /// <summary>Configures <see cref="NomadOptions"/> in code and registers <see cref="INomadClient"/> as a typed HTTP client.</summary>
+        [SuppressMessage("ApiDesign", "RS0026:Do not add multiple public overloads with optional parameters", Justification = "Settings bound from configuration or written in code are the two sources every Microsoft.Extensions registration offers; the required first argument tells them apart.")]
         public IServiceCollection AddNomad(Action<NomadOptions> configure, Action<IHttpClientBuilder>? configureClient = null)
         {
             ArgumentNullException.ThrowIfNull(services);

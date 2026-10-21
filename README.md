@@ -1,6 +1,6 @@
 # Snail.Toolkit.Nomad
 
-Typed client for the [HashiCorp Nomad HTTP API](https://developer.hashicorp.com/nomad/api-docs) for .NET 10, with Microsoft-only dependencies:
+Typed client for the [HashiCorp Nomad HTTP API](https://developer.hashicorp.com/nomad/api-docs) for .NET 10, over `IHttpClientFactory` and the transport of `Snail.Toolkit.HttpBuilder.Extensions`:
 
 - `INomadClient` — parse HCL2 jobs with variables, register, read, list, scale and stop jobs; read allocations, evaluations, client nodes and task logs;
 - `HclVariables` — renders job variables in the var-file syntax the parse endpoint expects;
@@ -25,12 +25,13 @@ Everything goes through one `HttpClient` from `IHttpClientFactory`; the ACL toke
     "Namespace": null,
     "Region": null,
     "Timeout": "00:00:30",
-    "WatchWait": "00:00:20"
+    "WatchWait": "00:00:20",
+    "WatchRetry": null
   }
 }
 ```
 
-`Address` is required and has no default — a missing one fails validation at start rather than quietly meaning localhost. `Token` is sent when set; `Namespace` and `Region` scope every request when set and fall back to the server defaults otherwise. `WatchWait` is how long a blocking query is held open and has to stay under `Timeout`.
+`Address` is required and has no default — a missing one fails validation at start rather than quietly meaning localhost. `Token` is sent when set; `Namespace` and `Region` scope every request when set and fall back to the server defaults otherwise. `WatchWait` is how long a blocking query is held open; Nomad adds up to a sixteenth of it as jitter, so it has to leave that room under `Timeout`. `WatchRetry`, when set, is how long a watch pauses before asking again after losing Nomad; unset, the watch throws.
 
 ### Registration
 
@@ -91,9 +92,9 @@ Reading and controlling:
 
 ```c#
 var current = await nomad.GetJobAsync("mcp-search");           // null when unknown
-var stubs   = await nomad.ListJobsAsync(prefix: "mcp-");       // with JobSummary counts per group
+var stubs   = await nomad.ListJobsAsync(prefix: "mcp-");       // .Items, with JobSummary counts per group
 var summary = await nomad.GetJobSummaryAsync("mcp-search");    // Queued / Running / Failed ...
-var allocs  = await nomad.ListAllocationsAsync("mcp-search");  // newest first
+var allocs  = await nomad.ListAllocationsAsync("mcp-search");  // .Items, in Nomad's order; empty for an unknown job
 var evals   = await nomad.ListEvaluationsAsync("mcp-search");  // blocked ones name the groups that cannot be placed
 
 await nomad.ScaleJobAsync("mcp-search", taskGroup: "server", count: 2, message: "dashboard");
@@ -114,17 +115,27 @@ await foreach (var allocations in nomad.WatchAllocationsAsync("mcp-search", canc
     Console.WriteLine($"{allocations.Count(allocation => allocation.IsRunning)} running");
 ```
 
-The sequence yields the current state first, then only on a real change, and ends when the job is purged.
+The sequence yields the current state first, then only on a real change, and ends when the job is purged. A cancelled token ends it by throwing `OperationCanceledException`, so a shutdown is told apart from a purge.
+
+A lost connection, a timeout or a server answering 5xx while it elects a leader ends the sequence with that failure, unless `WatchRetry` is set: then the watch logs a warning, pauses for that long and asks again from the index it last saw, as long as the token lives. Nomad answers at once with whatever changed in the pause, and a job purged in the pause still ends the sequence. A 403 is an answer, not a lost Nomad, and is thrown either way.
+
+```c#
+builder.Services.AddNomad(options =>
+{
+    options.Address = "http://nomad.service:4646";
+    options.WatchRetry = TimeSpan.FromSeconds(5);   // a dashboard follower that outlives a blip
+});
+```
 
 ### Paging
 
-The plain list calls read everything. On a large cluster take a page at a time:
+Every list answers a `NomadPage<T>`: without a `NomadPaging` it holds the whole list and `HasMore` is false. On a large cluster ask for a page size and follow the token:
 
 ```c#
 var paging = new NomadPaging(PageSize: 100);
 do
 {
-    var page = await nomad.ListJobsAsync(paging, prefix: "mcp-");
+    var page = await nomad.ListJobsAsync(prefix: "mcp-", paging: paging);
     Handle(page.Items);
     paging = paging with { Token = page.NextToken };
 }
@@ -134,15 +145,15 @@ while (paging.Token is not null);
 ### Allocations, nodes, logs
 
 ```c#
-var nodes = await nomad.ListNodesAsync();                          // IsReady = ready, not draining, eligible
+var nodes = await nomad.ListNodesAsync();                          // .Items; IsReady = ready, not draining, eligible
 var text  = await nomad.ReadLogsAsync(alloc.Id, task: "mcp", LogType.Stderr, tailBytes: 4096);
 ```
 
-`ReadLogsAsync` returns the tail of the stream as plain text, and an empty string when the allocation is gone or has written nothing yet. A client node that cannot be reached throws instead: a log viewer has to tell "this task said nothing" from "nobody could be asked". `tailBytes` is capped at `NomadClient.MaxTailBytes` (1 MiB).
+`ReadLogsAsync` returns the tail of the stream as plain text, and an empty string when the allocation is gone or has written nothing yet. A client node that cannot be reached, or that drops the connection while the tail streams, throws `HttpRequestException` instead: a log viewer has to tell "this task said nothing" from "nobody could be asked". `tailBytes` is capped at `NomadClient.MaxTailBytes` (1 MiB).
 
 ### Errors
 
-Every call that Nomad answers with an error status throws `NomadException`, carrying the status, Nomad's plain-text body (cut at `NomadException.BodyLimit`), and the method and address of the failed call.
+Every call that Nomad answers with an error status throws `NomadException`, carrying the status, Nomad's plain-text body (cut by the transport at 4 KB), and the method and address of the failed call. An answer whose body is not the JSON the call expects, a proxy's error page under a 200 for one, throws it too, with the serializer's exception inside.
 
 Reads addressed at one object by its id — `GetJobAsync`, `GetJobSummaryAsync`, `StopJobAsync` — return `null` when Nomad does not know it, and the lists hanging off a job id are empty. A list endpoint takes no id, so `ListJobsAsync` and `ListNodesAsync` treat a 404 as the error it is: an address that is not a Nomad agent must not read as an empty cluster.
 

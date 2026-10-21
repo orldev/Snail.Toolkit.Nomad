@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Net;
 using System.Net.Http.Json;
@@ -53,17 +54,13 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options,
     {
         try
         {
-            var leader = await Scoped(Get("v1/status/leader")).SendAsync(NomadJson.Default.String, cancellationToken).ConfigureAwait(false);
+            var leader = await ReadAsync(Scoped(Get("v1/status/leader")), NomadJson.Default.String, cancellationToken).ConfigureAwait(false);
 
             return string.IsNullOrEmpty(leader) ? null : leader;
         }
-        catch (HttpBuilderException failure) when (IsElection(failure))
+        catch (NomadException failure) when (IsElection(failure))
         {
             return null;
-        }
-        catch (HttpBuilderException failure)
-        {
-            throw Translate(failure);
         }
     }
 
@@ -86,6 +83,7 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options,
     }
 
     /// <inheritdoc/>
+    [SuppressMessage("ApiDesign", "RS0026:Do not add multiple public overloads with optional parameters", Justification = "A registration against an index is a contract of its own, answering null on a conflict; the two are told apart by the index, never by a defaulted argument.")]
     public async Task<JobRegistration> RegisterJobAsync(JsonObject job, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(job);
@@ -102,6 +100,7 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options,
     }
 
     /// <inheritdoc/>
+    [SuppressMessage("ApiDesign", "RS0026:Do not add multiple public overloads with optional parameters", Justification = "A registration against an index is a contract of its own, answering null on a conflict; the two are told apart by the index, never by a defaulted argument.")]
     public async Task<JobRegistration?> RegisterJobAsync(JsonObject job, ulong expectedModifyIndex, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(job);
@@ -139,12 +138,7 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options,
     }
 
     /// <inheritdoc/>
-    public async Task<IReadOnlyList<JobStub>> ListJobsAsync(string? prefix = null, CancellationToken cancellationToken = default) =>
-        await ReadAsync(
-            Scoped(Get("v1/jobs")).Query("prefix", prefix), NomadJson.Default.ListJobStub, cancellationToken).ConfigureAwait(false);
-
-    /// <inheritdoc/>
-    public async Task<NomadPage<JobStub>> ListJobsAsync(NomadPaging paging, string? prefix = null, CancellationToken cancellationToken = default) =>
+    public async Task<NomadPage<JobStub>> ListJobsAsync(string? prefix = null, NomadPaging paging = default, CancellationToken cancellationToken = default) =>
         await ReadPageAsync(Paged(Scoped(Get("v1/jobs")).Query("prefix", prefix), paging), NomadJson.Default.ListJobStub, cancellationToken).ConfigureAwait(false);
 
     /// <inheritdoc/>
@@ -165,22 +159,11 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options,
     }
 
     /// <inheritdoc/>
-    public async Task<IReadOnlyList<Allocation>> ListAllocationsAsync(string jobId, CancellationToken cancellationToken = default)
+    public async Task<NomadPage<Allocation>> ListAllocationsAsync(string jobId, NomadPaging paging = default, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(jobId);
 
-        var allocations = await ReadOrNullAsync(
-            Scoped(Get($"v1/job/{Escape(jobId)}/allocations")), NomadJson.Default.ListAllocation, cancellationToken).ConfigureAwait(false);
-
-        return allocations?.OrderByDescending(allocation => allocation.CreateTime).ToList() ?? [];
-    }
-
-    /// <inheritdoc/>
-    public async Task<NomadPage<Allocation>> ListAllocationsAsync(string jobId, NomadPaging paging, CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(jobId);
-
-        return await ReadPageAsync(
+        return await ReadPageOrEmptyAsync(
             Paged(Scoped(Get($"v1/job/{Escape(jobId)}/allocations")), paging),
             NomadJson.Default.ListAllocation, cancellationToken).ConfigureAwait(false);
     }
@@ -194,22 +177,11 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options,
     }
 
     /// <inheritdoc/>
-    public async Task<IReadOnlyList<Evaluation>> ListEvaluationsAsync(string jobId, CancellationToken cancellationToken = default)
+    public async Task<NomadPage<Evaluation>> ListEvaluationsAsync(string jobId, NomadPaging paging = default, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(jobId);
 
-        var evaluations = await ReadOrNullAsync(
-            Scoped(Get($"v1/job/{Escape(jobId)}/evaluations")), NomadJson.Default.ListEvaluation, cancellationToken).ConfigureAwait(false);
-
-        return evaluations?.OrderByDescending(evaluation => evaluation.CreateTime).ToList() ?? [];
-    }
-
-    /// <inheritdoc/>
-    public async Task<NomadPage<Evaluation>> ListEvaluationsAsync(string jobId, NomadPaging paging, CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(jobId);
-
-        return await ReadPageAsync(
+        return await ReadPageOrEmptyAsync(
             Paged(Scoped(Get($"v1/job/{Escape(jobId)}/evaluations")), paging),
             NomadJson.Default.ListEvaluation, cancellationToken).ConfigureAwait(false);
     }
@@ -252,11 +224,7 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options,
     }
 
     /// <inheritdoc/>
-    public async Task<IReadOnlyList<NodeStub>> ListNodesAsync(CancellationToken cancellationToken = default) =>
-        await ReadAsync(Scoped(Get("v1/nodes")), NomadJson.Default.ListNodeStub, cancellationToken).ConfigureAwait(false);
-
-    /// <inheritdoc/>
-    public async Task<NomadPage<NodeStub>> ListNodesAsync(NomadPaging paging, CancellationToken cancellationToken = default) =>
+    public async Task<NomadPage<NodeStub>> ListNodesAsync(NomadPaging paging = default, CancellationToken cancellationToken = default) =>
         await ReadPageAsync(Paged(Scoped(Get("v1/nodes")), paging), NomadJson.Default.ListNodeStub, cancellationToken).ConfigureAwait(false);
 
     /// <inheritdoc/>
@@ -289,6 +257,10 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options,
         {
             throw Translate(failure);
         }
+        catch (IOException failure)
+        {
+            throw new HttpRequestException("The client node dropped the connection while the log streamed.", failure);
+        }
     }
 
     private ILogger Log => logger ?? NullLogger<NomadClient>.Instance;
@@ -296,16 +268,32 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options,
     /// <remarks>
     /// Index zero asks Nomad to answer at once; every later request names the index the last answer
     /// carried, and Nomad holds it until something passes that index or the wait runs out. An answer
-    /// at the same index is that wait running out, and says nothing changed.
+    /// at the same index is that wait running out, and says nothing changed. A cancelled token ends
+    /// the sequence by throwing, so a caller can tell a shutdown from a purged job. With a
+    /// <see cref="NomadOptions.WatchRetry"/> a lost Nomad is waited for and asked again from the same
+    /// index; without one the failure is the caller's.
     /// </remarks>
     private async IAsyncEnumerable<T> WatchAsync<T>(
         string path, JsonTypeInfo<T> shape, [EnumeratorCancellation] CancellationToken cancellationToken)
         where T : class
     {
         var index = 0UL;
-        while (!cancellationToken.IsCancellationRequested)
+        while (true)
         {
-            var change = await ReadAtIndexAsync(path, shape, index, cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            (T Value, ulong Index)? change;
+            try
+            {
+                change = await ReadAtIndexAsync(path, shape, index, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception failure) when (options.Value.WatchRetry is { } retry && IsLostNomad(failure, cancellationToken))
+            {
+                NomadLog.WatchResumed(Log, failure, path, index, retry);
+                await Task.Delay(retry, cancellationToken).ConfigureAwait(false);
+                continue;
+            }
+
             if (change is null)
                 yield break;
 
@@ -326,14 +314,18 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options,
         }
     }
 
+    /// <remarks>
+    /// The wait travels in milliseconds: Nomad reads a Go duration, and whole seconds truncated a
+    /// WatchWait under one second to <c>0s</c>, which Nomad takes as its five-minute default.
+    /// </remarks>
     private async Task<(T Value, ulong Index)?> ReadAtIndexAsync<T>(
         string path, JsonTypeInfo<T> shape, ulong index, CancellationToken cancellationToken)
         where T : class
     {
-        var wait = (int)options.Value.WatchWait.TotalSeconds;
+        var wait = (long)options.Value.WatchWait.TotalMilliseconds;
         var request = Scoped(Get(path))
             .Query("index", index.ToString(CultureInfo.InvariantCulture))
-            .Query("wait", $"{wait}s");
+            .Query("wait", $"{wait}ms");
 
         try
         {
@@ -348,7 +340,7 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options,
         {
             return null;
         }
-        catch (HttpBuilderException failure)
+        catch (Exception failure) when (IsTransport(failure))
         {
             throw Translate(failure);
         }
@@ -361,7 +353,7 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options,
             ? index
             : 0;
 
-    /// <summary>Asks for one page instead of the whole list.</summary>
+    /// <summary>Asks for one page instead of the whole list; a default <see cref="NomadPaging"/> asks for nothing and gets the list whole.</summary>
     private static IHttpRequestBuilder Paged(IHttpRequestBuilder request, NomadPaging paging) =>
         request
             .Query("per_page", paging.PageSize > 0 ? paging.PageSize.ToString(CultureInfo.InvariantCulture) : null)
@@ -384,14 +376,26 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options,
 
             return new NomadPage<T>(items, string.IsNullOrEmpty(next) ? null : next);
         }
-        catch (HttpBuilderException failure)
+        catch (Exception failure) when (IsTransport(failure))
         {
             throw Translate(failure);
         }
-        catch (Exception exception) when (exception is JsonException or NotSupportedException)
+    }
+
+    /// <remarks>
+    /// A list hanging off a job id answers 404 for a job Nomad does not know, and that is emptiness
+    /// rather than the misdirection a 404 means on a list that takes no id.
+    /// </remarks>
+    private static async Task<NomadPage<T>> ReadPageOrEmptyAsync<T>(
+        IHttpRequestBuilder request, JsonTypeInfo<List<T>> shape, CancellationToken cancellationToken)
+    {
+        try
         {
-            throw new NomadException(
-                HttpStatusCode.OK, "Nomad returned a body that is not the JSON this call expects.", innerException: exception);
+            return await ReadPageAsync(request, shape, cancellationToken).ConfigureAwait(false);
+        }
+        catch (NomadException failure) when (failure.StatusCode == HttpStatusCode.NotFound)
+        {
+            return new NomadPage<T>([]);
         }
     }
 
@@ -411,24 +415,24 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options,
     /// without a default left unsent, fails the read instead of arriving as a null the type forbids.
     /// A 404 here says the path names no such object. On an endpoint that takes no identifier it
     /// says the address is not a Nomad agent, and answering with an empty list would report a
-    /// misdirected client as an empty cluster.
+    /// misdirected client as an empty cluster. The body is read as a stream, as a page is: a list of
+    /// five hundred jobs buffered whole was 500 KB on the large object heap for every call.
     /// </remarks>
     private static async Task<T> ReadAsync<T>(IHttpRequestBuilder request, JsonTypeInfo<T> shape, CancellationToken cancellationToken)
         where T : class
     {
         try
         {
-            return await request.SendAsync(shape, cancellationToken).ConfigureAwait(false)
-                   ?? throw new NomadException(HttpStatusCode.OK, $"Nomad returned an empty {typeof(T).Name}.");
+            using var response = await request
+                .SendCheckedAsync(HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+
+            var value = await response.Content.ReadFromJsonAsync(shape, cancellationToken).ConfigureAwait(false);
+
+            return value ?? throw new NomadException(HttpStatusCode.OK, $"Nomad returned an empty {typeof(T).Name}.");
         }
-        catch (HttpBuilderException failure)
+        catch (Exception failure) when (IsTransport(failure))
         {
             throw Translate(failure);
-        }
-        catch (Exception exception) when (exception is JsonException or NotSupportedException)
-        {
-            throw new NomadException(
-                HttpStatusCode.OK, "Nomad returned a body that is not the JSON this call expects.", innerException: exception);
         }
     }
 
@@ -462,16 +466,45 @@ public sealed class NomadClient(HttpClient http, IOptions<NomadOptions> options,
     private static bool IsIndexConflict(NomadException failure) =>
         failure.Message.Contains("job modify index", StringComparison.OrdinalIgnoreCase);
 
-    private static bool IsElection(HttpBuilderException failure) =>
+    private static bool IsElection(NomadException failure) =>
         failure.StatusCode == HttpStatusCode.InternalServerError
-        && failure.Body?.Contains("no cluster leader", StringComparison.OrdinalIgnoreCase) == true;
+        && failure.Message.Contains("no cluster leader", StringComparison.OrdinalIgnoreCase);
 
-    private static NomadException Translate(HttpBuilderException failure)
+    /// <summary>A failure a watch can wait out: no connection, a timeout that is not the caller's, or a server in trouble.</summary>
+    /// <remarks>
+    /// A 4xx is an answer about the request and stays final: a 403 will not become a 200 by waiting,
+    /// and a 404 has already ended the watch before this is asked.
+    /// </remarks>
+    private static bool IsLostNomad(Exception failure, CancellationToken cancellationToken) =>
+        failure switch
+        {
+            HttpRequestException => true,
+            OperationCanceledException => !cancellationToken.IsCancellationRequested,
+            NomadException answered => answered.StatusCode >= HttpStatusCode.InternalServerError,
+            _ => false
+        };
+
+    /// <summary>What the transport and the serializer throw, and this client's contract does not name.</summary>
+    private static bool IsTransport(Exception failure) =>
+        failure is HttpBuilderException or JsonException or NotSupportedException;
+
+    /// <remarks>
+    /// The one place a failure of the transport becomes a <see cref="NomadException"/>: an error status
+    /// keeps its status and Nomad's text, a body that is not the JSON a call expects reads as a 200
+    /// that said nothing usable. Every read ends in this translation, so a path cannot forget it.
+    /// </remarks>
+    private static NomadException Translate(Exception failure)
     {
-        var status = failure.StatusCode ?? HttpStatusCode.InternalServerError;
-        var message = string.IsNullOrWhiteSpace(failure.Body) ? $"Nomad answered {(int)status}." : failure.Body.Trim();
+        if (failure is not HttpBuilderException answered)
+        {
+            return new NomadException(
+                HttpStatusCode.OK, "Nomad returned a body that is not the JSON this call expects.", innerException: failure);
+        }
 
-        return new NomadException(status, message, failure.Method, failure.RequestUri, failure);
+        var status = answered.StatusCode ?? HttpStatusCode.InternalServerError;
+        var message = string.IsNullOrWhiteSpace(answered.Body) ? $"Nomad answered {(int)status}." : answered.Body.Trim();
+
+        return new NomadException(status, message, answered.Method, answered.RequestUri, answered);
     }
 
     private static string? Given(string? value) => string.IsNullOrEmpty(value) ? null : value;

@@ -46,6 +46,7 @@ public static class HclVariables
         {
             null => "null",
             string text => Quote(text),
+            char character => Quote(character.ToString()),
             bool flag => flag ? "true" : "false",
             byte or sbyte or short or ushort or int or uint or long or ulong => Convert.ToString(value, CultureInfo.InvariantCulture)!,
             float or double or decimal => Number(value),

@@ -31,4 +31,14 @@ public sealed class NomadOptions
     /// sixteenth of this on top, and the client's own timeout aborts the call regardless.
     /// </remarks>
     public TimeSpan WatchWait { get; set; } = TimeSpan.FromSeconds(20);
+
+    /// <summary>How long a watch pauses before asking again after a transport failure; none, and the watch throws instead.</summary>
+    /// <remarks>
+    /// A blocking query resumes from the index it last saw: Nomad answers at once with whatever changed in
+    /// the pause, and a job purged in the pause ends the watch as it would have. So a follower that is
+    /// meant to live as long as its token survives a dropped connection, a timeout or a server answering
+    /// 5xx while it elects a leader, and tries again every <see cref="WatchRetry"/> until the token is
+    /// cancelled. Off by default: a caller that wants to see the failure sees it.
+    /// </remarks>
+    public TimeSpan? WatchRetry { get; set; }
 }

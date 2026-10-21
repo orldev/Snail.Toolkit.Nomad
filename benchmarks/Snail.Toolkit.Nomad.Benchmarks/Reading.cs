@@ -24,7 +24,7 @@ public class Reading
     }
 
     [Benchmark]
-    public async Task<int> ListJobs() => (await _jobs.ListJobsAsync()).Count;
+    public async Task<int> ListJobs() => (await _jobs.ListJobsAsync()).Items.Count;
 
     [Benchmark]
     public async Task<int> ReadLogTail() => (await _logs.ReadLogsAsync("a1b2c3", "server", tailBytes: 4096)).Length;

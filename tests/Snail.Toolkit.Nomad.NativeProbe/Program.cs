@@ -31,7 +31,7 @@ var nomad = services.GetRequiredService<INomadClient>();
 var agent = await nomad.GetAgentAsync();
 var leader = await nomad.GetLeaderAsync();
 var jobs = await nomad.ListJobsAsync();
-var page = await nomad.ListJobsAsync(new NomadPaging(1));
+var page = await nomad.ListJobsAsync(paging: new NomadPaging(1));
 var job = await nomad.GetJobAsync("web");
 var summary = await nomad.GetJobSummaryAsync("web");
 var allocations = await nomad.ListAllocationsAsync("web");
@@ -48,11 +48,11 @@ var hcl = HclVariables.Render(new Dictionary<string, object?> { ["image"] = "web
 var isBound = answers.IsScoped && answers.Token == "secret";
 var isRead = agent is { Name: "node-1", Version: "1.10.0", IsServerEnabled: true }
     && leader == "10.0.0.1:4647"
-    && jobs is [{ Id: "web", Status: "running" }]
+    && jobs.Items is [{ Id: "web", Status: "running" }]
     && page is { Items: [{ Id: "web" }], NextToken: "next" }
     && job is { Id: "web", DesiredCount: 3 }
     && summary is { Running: 2 }
-    && allocations is [{ Id: "new" }, { Id: "old" }]
+    && allocations.Items is [{ Id: "old" }, { Id: "new" }]
     && watched is [{ Id: "web" }]
     && stopped is null
     && tail == "line one\nline two\n";

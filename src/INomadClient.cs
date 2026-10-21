@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json.Nodes;
 using Snail.Toolkit.Nomad.Models;
 
@@ -24,6 +25,7 @@ public interface INomadJobs
 
     /// <summary>Registers (creates or updates) a job given in its JSON form, as returned by <see cref="ParseJobAsync"/>.</summary>
     /// <remarks>Last writer wins. Where two deployers can race, register against an index instead.</remarks>
+    [SuppressMessage("ApiDesign", "RS0026:Do not add multiple public overloads with optional parameters", Justification = "A registration against an index is a contract of its own, answering null on a conflict; the two are told apart by the index, never by a defaulted argument.")]
     Task<JobRegistration> RegisterJobAsync(JsonObject job, CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -35,17 +37,18 @@ public interface INomadJobs
     /// Zero is the index of a job that does not exist yet, so passing it registers only if nothing
     /// is there. Without this, two deployments of the same job silently overwrote one another.
     /// </remarks>
+    [SuppressMessage("ApiDesign", "RS0026:Do not add multiple public overloads with optional parameters", Justification = "A registration against an index is a contract of its own, answering null on a conflict; the two are told apart by the index, never by a defaulted argument.")]
     Task<JobRegistration?> RegisterJobAsync(JsonObject job, ulong expectedModifyIndex, CancellationToken cancellationToken = default);
 
     /// <summary>The job, or null when Nomad does not know it.</summary>
     Task<NomadJob?> GetJobAsync(string jobId, CancellationToken cancellationToken = default);
 
-    /// <summary>Jobs of the namespace, optionally only those whose id starts with <paramref name="prefix"/>.</summary>
-    /// <remarks>Reads the whole list; on a large cluster take it a page at a time instead.</remarks>
-    Task<IReadOnlyList<JobStub>> ListJobsAsync(string? prefix = null, CancellationToken cancellationToken = default);
-
-    /// <summary>One page of the namespace's jobs.</summary>
-    Task<NomadPage<JobStub>> ListJobsAsync(NomadPaging paging, string? prefix = null, CancellationToken cancellationToken = default);
+    /// <summary>Jobs of the namespace, optionally only those whose id starts with <paramref name="prefix"/>, whole or one page at a time.</summary>
+    /// <remarks>
+    /// Without <paramref name="paging"/> Nomad answers the whole list in one page; on a large cluster ask for
+    /// a page size and follow <see cref="NomadPage{T}.NextToken"/>.
+    /// </remarks>
+    Task<NomadPage<JobStub>> ListJobsAsync(string? prefix = null, NomadPaging paging = default, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Yields the job as it stands, then again on every change Nomad records, until the job is
@@ -70,29 +73,19 @@ public interface INomadJobs
 /// <summary>What the scheduler did with a job: where it placed it, and why it could not.</summary>
 public interface INomadScheduling
 {
-    /// <summary>Allocations of the job, newest first; empty for an unknown job.</summary>
-    /// <remarks>Reads them all; a long-lived job accumulates thousands, so prefer a page.</remarks>
-    Task<IReadOnlyList<Allocation>> ListAllocationsAsync(string jobId, CancellationToken cancellationToken = default);
+    /// <summary>Allocations of the job in Nomad's own order, whole or one page at a time; empty for an unknown job.</summary>
+    /// <remarks>A long-lived job accumulates thousands, so a dashboard asks for a page.</remarks>
+    Task<NomadPage<Allocation>> ListAllocationsAsync(string jobId, NomadPaging paging = default, CancellationToken cancellationToken = default);
 
-    /// <summary>One page of the job's allocations, in Nomad's own order.</summary>
-    Task<NomadPage<Allocation>> ListAllocationsAsync(string jobId, NomadPaging paging, CancellationToken cancellationToken = default);
-
-    /// <summary>Evaluations of the job, newest first; empty for an unknown job.</summary>
-    Task<IReadOnlyList<Evaluation>> ListEvaluationsAsync(string jobId, CancellationToken cancellationToken = default);
-
-    /// <summary>One page of the job's evaluations, in Nomad's own order.</summary>
-    Task<NomadPage<Evaluation>> ListEvaluationsAsync(string jobId, NomadPaging paging, CancellationToken cancellationToken = default);
+    /// <summary>Evaluations of the job in Nomad's own order, whole or one page at a time; empty for an unknown job.</summary>
+    Task<NomadPage<Evaluation>> ListEvaluationsAsync(string jobId, NomadPaging paging = default, CancellationToken cancellationToken = default);
 }
 
 /// <summary>The client nodes jobs are placed on.</summary>
 public interface INomadNodes
 {
-    /// <summary>Client nodes of the region.</summary>
-    /// <remarks>Reads the whole list; on a large cluster take it a page at a time instead.</remarks>
-    Task<IReadOnlyList<NodeStub>> ListNodesAsync(CancellationToken cancellationToken = default);
-
-    /// <summary>One page of the region's client nodes.</summary>
-    Task<NomadPage<NodeStub>> ListNodesAsync(NomadPaging paging, CancellationToken cancellationToken = default);
+    /// <summary>Client nodes of the region, whole or one page at a time.</summary>
+    Task<NomadPage<NodeStub>> ListNodesAsync(NomadPaging paging = default, CancellationToken cancellationToken = default);
 }
 
 /// <summary>What a running task wrote.</summary>
@@ -100,8 +93,9 @@ public interface INomadLogs
 {
     /// <summary>The last <paramref name="tailBytes"/> of one task's stdout or stderr; empty when the allocation is gone or has no log yet.</summary>
     /// <remarks>
-    /// A client node that cannot be reached throws instead of answering empty: a log viewer has to
-    /// tell "this task said nothing" from "nobody could be asked".
+    /// A client node that cannot be reached, or that drops the connection while the tail streams, throws
+    /// <see cref="HttpRequestException"/> instead of answering empty: a log viewer has to tell "this task
+    /// said nothing" from "nobody could be asked".
     /// </remarks>
     Task<string> ReadLogsAsync(string allocationId, string task, LogType type = LogType.Stdout, int tailBytes = 4096, CancellationToken cancellationToken = default);
 }

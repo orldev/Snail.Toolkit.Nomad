@@ -64,7 +64,7 @@ public sealed class NomadClientTests
         Assert.Null(await client.GetJobAsync("nope"));
         Assert.Null(await client.GetJobSummaryAsync("nope"));
         Assert.Null(await client.StopJobAsync("nope"));
-        Assert.Empty(await client.ListAllocationsAsync("nope"));
+        Assert.Empty((await client.ListAllocationsAsync("nope")).Items);
     }
 
     /// <summary>Nomad 2.0.7, a running task: FinishedAt and LastRestart are null, and the list failed whole on them.</summary>
@@ -78,7 +78,7 @@ public sealed class NomadClientTests
                                    "StartedAt":"2026-09-28T12:52:03.150877751Z","FinishedAt":null}}}]
             """));
 
-        var state = Assert.Single(await client.ListAllocationsAsync("mcp-sandbox")).TaskStates!["mcp"];
+        var state = Assert.Single((await client.ListAllocationsAsync("mcp-sandbox")).Items).TaskStates!["mcp"];
 
         Assert.Equal("running", state.State);
         Assert.NotNull(state.StartedAt);
@@ -109,7 +109,7 @@ public sealed class NomadClientTests
               "SubmitTime":1,"JobSummary":{"JobID":"mcp-search","Namespace":"default","Summary":{"server":{"Queued":1,"Complete":0,"Failed":0,"Running":2,"Starting":0,"Lost":0,"Unknown":0}}}}]
             """));
 
-        var stub = Assert.Single(await client.ListJobsAsync());
+        var stub = Assert.Single((await client.ListJobsAsync()).Items);
 
         Assert.Equal(2, stub.JobSummary!.Running);
         Assert.Equal(3, stub.JobSummary.Summary["server"].Live);
@@ -202,6 +202,23 @@ public sealed class NomadClientTests
         {
             options.Address = "http://nomad.local:4646";
             options.Timeout = TimeSpan.Zero;
+        });
+
+        using var provider = services.BuildServiceProvider();
+
+        Assert.Throws<OptionsValidationException>(() => provider.GetRequiredService<IOptions<NomadOptions>>().Value);
+    }
+
+    /// <summary>Nomad holds a watch up to a sixteenth longer than asked, so a wait that nearly fills the timeout is cut by it.</summary>
+    [Fact]
+    public void AddNomad_WithAWatchWaitThatLeavesNoRoomForJitter_FailsValidation()
+    {
+        var services = new ServiceCollection();
+        services.AddNomad(options =>
+        {
+            options.Address = "http://nomad.local:4646";
+            options.Timeout = TimeSpan.FromSeconds(30);
+            options.WatchWait = TimeSpan.FromSeconds(29);
         });
 
         using var provider = services.BuildServiceProvider();
@@ -358,7 +375,7 @@ public sealed class NomadClientTests
         var handler = new RecordingHandler(HttpStatusCode.OK, "[]", ("X-Nomad-NextToken", "eyJ0IjoxfQ"));
         var client = RecordingHandler.Client(handler);
 
-        var page = await client.ListJobsAsync(new NomadPaging(50), "mcp-");
+        var page = await client.ListJobsAsync("mcp-", new NomadPaging(50));
 
         Assert.Equal("eyJ0IjoxfQ", page.NextToken);
         Assert.True(page.HasMore);

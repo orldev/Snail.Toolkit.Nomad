@@ -32,8 +32,8 @@ public sealed class NomadWatchTests
 
         await TakeAsync(client.WatchJobAsync("mcp-search"), 2);
 
-        Assert.Contains("index=0&wait=20s", handler.Requests[0], StringComparison.Ordinal);
-        Assert.Contains("index=7&wait=20s", handler.Requests[1], StringComparison.Ordinal);
+        Assert.Contains("index=0&wait=20000ms", handler.Requests[0], StringComparison.Ordinal);
+        Assert.Contains("index=7&wait=20000ms", handler.Requests[1], StringComparison.Ordinal);
     }
 
     [Fact]
@@ -60,11 +60,57 @@ public sealed class NomadWatchTests
         Assert.Single(handler.Requests);
     }
 
-    private static NomadClient Client(IndexedHandler handler)
+    /// <summary>The second request finds no Nomad; with a retry the watch asks again from the index it had.</summary>
+    [Fact]
+    public async Task WatchJob_WithARetry_WhenNomadIsLost_ResumesFromItsIndex()
+    {
+        var handler = new IndexedHandler(Job, [7, 9], loseNomadAt: 1);
+        var client = Client(handler, TimeSpan.FromMilliseconds(1));
+
+        var seen = await TakeAsync(client.WatchJobAsync("mcp-search"), 2);
+
+        Assert.Equal(2, seen.Count);
+        Assert.Equal(3, handler.Requests.Count);
+        Assert.Contains("index=7&", handler.Requests[2], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task WatchJob_WithoutARetry_WhenNomadIsLost_Throws()
+    {
+        var handler = new IndexedHandler(Job, [7, 9], loseNomadAt: 1);
+        var client = Client(handler);
+
+        await Assert.ThrowsAsync<HttpRequestException>(() => TakeAsync(client.WatchJobAsync("mcp-search"), 2));
+    }
+
+    /// <summary>The pause is the caller's token's to cut: a shutdown during it ends the watch at once.</summary>
+    [Fact]
+    public async Task WatchJob_WithARetry_WhenCancelledDuringThePause_Throws()
+    {
+        var handler = new IndexedHandler(Job, [7], loseNomadAt: 0);
+        var client = Client(handler, TimeSpan.FromMinutes(1));
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => TakeAsync(client.WatchJobAsync("mcp-search", cancellation.Token), 1));
+    }
+
+    /// <summary>A 403 is an answer, not a lost Nomad, and waiting would not change it.</summary>
+    [Fact]
+    public async Task WatchJob_WithARetry_WhenNomadRefuses_Throws()
+    {
+        var handler = new IndexedHandler(Job, [7], refuseAt: 0);
+        var client = Client(handler, TimeSpan.FromMilliseconds(1));
+
+        var failure = await Assert.ThrowsAsync<NomadException>(() => TakeAsync(client.WatchJobAsync("mcp-search"), 1));
+
+        Assert.Equal(HttpStatusCode.Forbidden, failure.StatusCode);
+    }
+
+    private static NomadClient Client(IndexedHandler handler, TimeSpan? retry = null)
     {
         var http = new HttpClient(handler) { BaseAddress = new Uri("http://nomad.test:4646/") };
 
-        return new NomadClient(http, Options.Create(new NomadOptions { Address = "http://nomad.test:4646" }));
+        return new NomadClient(http, Options.Create(new NomadOptions { Address = "http://nomad.test:4646", WatchRetry = retry }));
     }
 
     private static async Task<List<T>> TakeAsync<T>(IAsyncEnumerable<T> source, int count)
@@ -80,8 +126,12 @@ public sealed class NomadWatchTests
         return taken;
     }
 
-    /// <summary>Answers with a scripted sequence of X-Nomad-Index values, then 404 if asked to.</summary>
-    private sealed class IndexedHandler(string body, ulong[] indexes, int purgeAfter = int.MaxValue) : HttpMessageHandler
+    /// <summary>
+    /// Answers with a scripted sequence of X-Nomad-Index values; 404 from <c>purgeAfter</c> on, no connection on the
+    /// <c>loseNomadAt</c> turn, 403 on the <c>refuseAt</c> turn.
+    /// </summary>
+    private sealed class IndexedHandler(
+        string body, ulong[] indexes, int purgeAfter = int.MaxValue, int loseNomadAt = -1, int refuseAt = -1) : HttpMessageHandler
     {
         public List<string> Requests { get; } = [];
 
@@ -90,10 +140,17 @@ public sealed class NomadWatchTests
             var turn = Requests.Count;
             Requests.Add(request.RequestUri!.Query);
 
+            if (turn == loseNomadAt)
+                throw new HttpRequestException("Connection refused");
+
+            if (turn == refuseAt)
+                return Task.FromResult(Answer(HttpStatusCode.Forbidden, "Permission denied", null, request));
+
             if (turn >= purgeAfter)
                 return Task.FromResult(Answer(HttpStatusCode.NotFound, "job not found", null, request));
 
-            var index = indexes[Math.Min(turn, indexes.Length - 1)];
+            var answered = loseNomadAt >= 0 && turn > loseNomadAt ? turn - 1 : turn;
+            var index = indexes[Math.Min(answered, indexes.Length - 1)];
 
             return Task.FromResult(Answer(HttpStatusCode.OK, body, index, request));
         }

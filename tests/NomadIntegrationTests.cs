@@ -99,7 +99,7 @@ public sealed class NomadIntegrationTests(NomadContainerFixture fixture) : IClas
         Assert.Equal(1, read.DesiredCount);
 
         var listed = await client.ListJobsAsync("mcp-it-");
-        Assert.Contains(listed, stub => stub.Id == jobId);
+        Assert.Contains(listed.Items, stub => stub.Id == jobId);
 
         var summary = await PollAsync(
             () => client.GetJobSummaryAsync(jobId),
@@ -109,10 +109,10 @@ public sealed class NomadIntegrationTests(NomadContainerFixture fixture) : IClas
 
         var evaluations = await PollAsync(
             () => client.ListEvaluationsAsync(jobId),
-            evaluations => evaluations.Any(evaluation => evaluation.FailedTaskGroups.Contains("server")));
-        Assert.Contains(evaluations, evaluation => evaluation.FailedTaskGroups.Contains("server"));
-        Assert.Empty(await client.ListAllocationsAsync(jobId));
-        Assert.Empty(await client.ListNodesAsync());
+            evaluations => evaluations.Items.Any(evaluation => evaluation.FailedTaskGroups.Contains("server")));
+        Assert.Contains(evaluations.Items, evaluation => evaluation.FailedTaskGroups.Contains("server"));
+        Assert.Empty((await client.ListAllocationsAsync(jobId)).Items);
+        Assert.Empty((await client.ListNodesAsync()).Items);
 
         Assert.NotNull(await client.StopJobAsync(jobId, purge: true));
         Assert.Null(await client.GetJobAsync(jobId));

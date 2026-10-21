@@ -24,7 +24,6 @@ Parsing, registering, reading and controlling jobs.
 | Member | Summary |
 | --- | --- |
 | `IAsyncEnumerable<NomadJob> WatchJobAsync(string jobId, CancellationToken cancellationToken = default)` | Yields the job as it stands, then again on every change Nomad records, until the job is purged or the caller stops enumerating. |
-| `Task<IReadOnlyList<JobStub>> ListJobsAsync(string? prefix = null, CancellationToken cancellationToken = default)` | Jobs of the namespace, optionally only those whose id starts with `prefix`. |
 | `Task<JobRegistration> RegisterJobAsync(JsonObject job, CancellationToken cancellationToken = default)` | Registers (creates or updates) a job given in its JSON form, as returned by `ParseJobAsync`. |
 | `Task<JobRegistration> ScaleJobAsync(string jobId, string taskGroup, int count, string? message = null, CancellationToken cancellationToken = default)` | Sets the desired count of one task group. Nomad refuses while a deployment of the job is still active. |
 | `Task<JobRegistration?> RegisterJobAsync(JsonObject job, ulong expectedModifyIndex, CancellationToken cancellationToken = default)` | Registers the job only while it still stands at `expectedModifyIndex`, from `Version`'s neighbour `JobModifyIndex` or a previous registration. Null when someone else has changed it since — read it again and decide. |
@@ -32,7 +31,7 @@ Parsing, registering, reading and controlling jobs.
 | `Task<JobSummary?> GetJobSummaryAsync(string jobId, CancellationToken cancellationToken = default)` | Allocation counts of the job by task group, or null when Nomad does not know it. |
 | `Task<JsonObject> ParseJobAsync(string hcl, string? variables = null, bool canonicalize = true, CancellationToken cancellationToken = default)` | Parses an HCL2 job into its JSON form. `variables` is a var-file string (see `Render`); with `canonicalize` the server fills defaults. |
 | `Task<NomadJob?> GetJobAsync(string jobId, CancellationToken cancellationToken = default)` | The job, or null when Nomad does not know it. |
-| `Task<NomadPage<JobStub>> ListJobsAsync(NomadPaging paging, string? prefix = null, CancellationToken cancellationToken = default)` | One page of the namespace's jobs. |
+| `Task<NomadPage<JobStub>> ListJobsAsync(string? prefix = null, NomadPaging paging = default, CancellationToken cancellationToken = default)` | Jobs of the namespace, optionally only those whose id starts with `prefix`, whole or one page at a time. |
 
 ### interface INomadLogs
 
@@ -48,8 +47,7 @@ The client nodes jobs are placed on.
 
 | Member | Summary |
 | --- | --- |
-| `Task<IReadOnlyList<NodeStub>> ListNodesAsync(CancellationToken cancellationToken = default)` | Client nodes of the region. |
-| `Task<NomadPage<NodeStub>> ListNodesAsync(NomadPaging paging, CancellationToken cancellationToken = default)` | One page of the region's client nodes. |
+| `Task<NomadPage<NodeStub>> ListNodesAsync(NomadPaging paging = default, CancellationToken cancellationToken = default)` | Client nodes of the region, whole or one page at a time. |
 
 ### interface INomadScheduling
 
@@ -57,10 +55,8 @@ What the scheduler did with a job: where it placed it, and why it could not.
 
 | Member | Summary |
 | --- | --- |
-| `Task<IReadOnlyList<Allocation>> ListAllocationsAsync(string jobId, CancellationToken cancellationToken = default)` | Allocations of the job, newest first; empty for an unknown job. |
-| `Task<IReadOnlyList<Evaluation>> ListEvaluationsAsync(string jobId, CancellationToken cancellationToken = default)` | Evaluations of the job, newest first; empty for an unknown job. |
-| `Task<NomadPage<Allocation>> ListAllocationsAsync(string jobId, NomadPaging paging, CancellationToken cancellationToken = default)` | One page of the job's allocations, in Nomad's own order. |
-| `Task<NomadPage<Evaluation>> ListEvaluationsAsync(string jobId, NomadPaging paging, CancellationToken cancellationToken = default)` | One page of the job's evaluations, in Nomad's own order. |
+| `Task<NomadPage<Allocation>> ListAllocationsAsync(string jobId, NomadPaging paging = default, CancellationToken cancellationToken = default)` | Allocations of the job in Nomad's own order, whole or one page at a time; empty for an unknown job. |
+| `Task<NomadPage<Evaluation>> ListEvaluationsAsync(string jobId, NomadPaging paging = default, CancellationToken cancellationToken = default)` | Evaluations of the job in Nomad's own order, whole or one page at a time; empty for an unknown job. |
 
 ### interface INomadStatus
 
@@ -91,10 +87,6 @@ The edits a deployer makes to a parsed job before registering it.
 | `IAsyncEnumerable<IReadOnlyList<Allocation>> WatchAllocationsAsync(string jobId, CancellationToken cancellationToken = default)` |  |
 | `IAsyncEnumerable<NomadJob> WatchJobAsync(string jobId, CancellationToken cancellationToken = default)` | Yields the job as it stands, then again on every change Nomad records, until the job is purged or the caller stops enumerating. |
 | `NomadClient(HttpClient http, IOptions<NomadOptions> options, ILogger<NomadClient>? logger = null)` | `INomadClient` over one `HttpClient` configured by AddNomad: the token travels as a default header, namespace and region as query parameters of every request. |
-| `Task<IReadOnlyList<Allocation>> ListAllocationsAsync(string jobId, CancellationToken cancellationToken = default)` | Allocations of the job, newest first; empty for an unknown job. |
-| `Task<IReadOnlyList<Evaluation>> ListEvaluationsAsync(string jobId, CancellationToken cancellationToken = default)` | Evaluations of the job, newest first; empty for an unknown job. |
-| `Task<IReadOnlyList<JobStub>> ListJobsAsync(string? prefix = null, CancellationToken cancellationToken = default)` | Jobs of the namespace, optionally only those whose id starts with `prefix`. |
-| `Task<IReadOnlyList<NodeStub>> ListNodesAsync(CancellationToken cancellationToken = default)` | Client nodes of the region. |
 | `Task<JobRegistration> RegisterJobAsync(JsonObject job, CancellationToken cancellationToken = default)` | Registers (creates or updates) a job given in its JSON form, as returned by `ParseJobAsync`. |
 | `Task<JobRegistration> ScaleJobAsync(string jobId, string taskGroup, int count, string? message = null, CancellationToken cancellationToken = default)` | Sets the desired count of one task group. Nomad refuses while a deployment of the job is still active. |
 | `Task<JobRegistration?> RegisterJobAsync(JsonObject job, ulong expectedModifyIndex, CancellationToken cancellationToken = default)` | Registers the job only while it still stands at `expectedModifyIndex`, from `Version`'s neighbour `JobModifyIndex` or a previous registration. Null when someone else has changed it since — read it again and decide. |
@@ -103,10 +95,10 @@ The edits a deployer makes to a parsed job before registering it.
 | `Task<JsonObject> ParseJobAsync(string hcl, string? variables = null, bool canonicalize = true, CancellationToken cancellationToken = default)` | Parses an HCL2 job into its JSON form. `variables` is a var-file string (see `Render`); with `canonicalize` the server fills defaults. |
 | `Task<NomadAgent> GetAgentAsync(CancellationToken cancellationToken = default)` | The agent behind the configured address. |
 | `Task<NomadJob?> GetJobAsync(string jobId, CancellationToken cancellationToken = default)` | The job, or null when Nomad does not know it. |
-| `Task<NomadPage<Allocation>> ListAllocationsAsync(string jobId, NomadPaging paging, CancellationToken cancellationToken = default)` | One page of the job's allocations, in Nomad's own order. |
-| `Task<NomadPage<Evaluation>> ListEvaluationsAsync(string jobId, NomadPaging paging, CancellationToken cancellationToken = default)` | One page of the job's evaluations, in Nomad's own order. |
-| `Task<NomadPage<JobStub>> ListJobsAsync(NomadPaging paging, string? prefix = null, CancellationToken cancellationToken = default)` | One page of the namespace's jobs. |
-| `Task<NomadPage<NodeStub>> ListNodesAsync(NomadPaging paging, CancellationToken cancellationToken = default)` | One page of the region's client nodes. |
+| `Task<NomadPage<Allocation>> ListAllocationsAsync(string jobId, NomadPaging paging = default, CancellationToken cancellationToken = default)` | Allocations of the job in Nomad's own order, whole or one page at a time; empty for an unknown job. |
+| `Task<NomadPage<Evaluation>> ListEvaluationsAsync(string jobId, NomadPaging paging = default, CancellationToken cancellationToken = default)` | Evaluations of the job in Nomad's own order, whole or one page at a time; empty for an unknown job. |
+| `Task<NomadPage<JobStub>> ListJobsAsync(string? prefix = null, NomadPaging paging = default, CancellationToken cancellationToken = default)` | Jobs of the namespace, optionally only those whose id starts with `prefix`, whole or one page at a time. |
+| `Task<NomadPage<NodeStub>> ListNodesAsync(NomadPaging paging = default, CancellationToken cancellationToken = default)` | Client nodes of the region, whole or one page at a time. |
 | `Task<string> ReadLogsAsync(string allocationId, string task, LogType type = 0, int tailBytes = 4096, CancellationToken cancellationToken = default)` | The last `tailBytes` of one task's stdout or stderr; empty when the allocation is gone or has no log yet. |
 | `Task<string?> GetLeaderAsync(CancellationToken cancellationToken = default)` | Address of the current leader, or null while the cluster has none. |
 | `const int MaxTailBytes` | Largest tail one log read may ask for. |
@@ -131,6 +123,7 @@ Connection settings bound from the "Nomad" configuration section.
 | `NomadOptions()` |  |
 | `TimeSpan Timeout { get; set; }` | Timeout of one HTTP call. |
 | `TimeSpan WatchWait { get; set; }` | How long a watch asks Nomad to hold a request open while nothing changes. |
+| `TimeSpan? WatchRetry { get; set; }` | How long a watch pauses before asking again after a transport failure; none, and the watch throws instead. |
 | `const string SectionName` | Name of the configuration section the options are bound from. |
 | `string Address { get; set; }` | Base address of the Nomad HTTP API, e.g. "http://localhost:4646". |
 | `string? Namespace { get; set; }` | Namespace every request is scoped to; the server default ("default") when empty. |
