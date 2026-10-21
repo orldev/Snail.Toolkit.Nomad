@@ -1,6 +1,7 @@
 name: performance
 
 # Every two months: the benchmarks against benchmarks/Snail.Toolkit.Nomad.Benchmarks/baseline/, and Stryker.NET on the tests.
+# GitHub lists a workflow that has no push trigger only after a push that touches its file.
 
 on:
   schedule:

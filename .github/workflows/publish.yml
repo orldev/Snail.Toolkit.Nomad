@@ -4,6 +4,7 @@ name: release to NuGet
 # them and pushes only when asked to. The shared workflow builds, tests and packs; the push is a job of this file
 # because nuget.org gives a trusted publishing key only to a job of the workflow file its policy names in this
 # repository (job_workflow_ref): this publish.yml, with the secret NUGET_USER.
+# GitHub lists a workflow that has no push trigger only after a push that touches its file.
 
 on:
   push:
