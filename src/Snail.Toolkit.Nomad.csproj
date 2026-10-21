@@ -13,7 +13,7 @@
         <PackageReadmeFile>README.md</PackageReadmeFile>
         <PackageLicenseExpression>MIT</PackageLicenseExpression>
         <EnableConfigurationBindingGenerator>true</EnableConfigurationBindingGenerator>
-        <Version>0.2.1</Version>
+        <Version>0.3.0</Version>
     </PropertyGroup>
 
     <ItemGroup>
